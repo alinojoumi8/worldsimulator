@@ -183,4 +183,32 @@ describe("bounded conversation rules", () => {
     expect(conversationRelationshipStrength({ type: "business", strength: 1 }, "escalate"))
       .toBe(0);
   });
+
+  it("generates price-consistent investment menus and rejects forged economics", () => {
+    const bounds = {
+      kind: "investment" as const,
+      referenceId: "prop_00000001",
+      minAmountCents: "8000000",
+      maxAmountCents: "10000000",
+      minPreMoneyValuationCents: "32000000",
+      maxPreMoneyValuationCents: "40000000",
+    };
+    const candidates = conversationTermCandidates(bounds);
+    expect(candidates).toHaveLength(3);
+    expect(candidates.every((terms) => termsWithinConversationBounds(bounds, terms))).toBe(true);
+    expect(candidates).toContainEqual({
+      kind: "investment",
+      referenceId: "prop_00000001",
+      amountCents: "10000000",
+      preMoneyValuationCents: "40000000",
+      equityBasisPoints: 2_000,
+    });
+    expect(() => termsWithinConversationBounds(bounds, {
+      kind: "investment",
+      referenceId: "prop_00000001",
+      amountCents: "10000000",
+      preMoneyValuationCents: "40000000",
+      equityBasisPoints: 5_000,
+    })).toThrow(/inconsistent/);
+  });
 });

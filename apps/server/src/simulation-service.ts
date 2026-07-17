@@ -169,6 +169,7 @@ import {
   prepareConversationBatch,
 } from "./conversation-phase";
 import { createNegotiationBindingPhaseHandler } from "./negotiation-phase";
+import { createInvestmentProposalPhaseHandler } from "./investment-phase";
 import { TimedLlmProvider } from "./llm-telemetry-provider";
 import {
   createNewsStoryPhaseHandler,
@@ -2769,6 +2770,10 @@ export class SimulationService implements SimulationApi {
           loop.registerPhase(
             "decisions",
             createConversationPhaseHandler(db, runId, conversationBatch),
+          );
+          loop.registerPhase(
+            "decisions",
+            createInvestmentProposalPhaseHandler(db, runId),
           );
           loop.registerPhase(
             "decisions",

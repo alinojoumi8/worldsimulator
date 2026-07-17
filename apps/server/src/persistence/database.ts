@@ -16,6 +16,7 @@ interface Migration {
   readonly version: number;
   readonly name: string;
   readonly sql: string;
+  readonly requiresForeignKeysOff?: boolean;
 }
 
 const INITIAL_SCHEMA = `
@@ -3936,6 +3937,197 @@ CREATE TRIGGER vc_fund_deployments_no_delete BEFORE DELETE ON vc_fund_deployment
 BEGIN SELECT RAISE(ABORT, 'venture fund deployments are immutable'); END;
 `;
 
+const PHASE_8_INVESTMENT_PROPOSALS = `
+CREATE TABLE conversations_v32 (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (id GLOB 'cnv_[0-9a-z]*' AND length(id) >= 12),
+  participant_a_id TEXT NOT NULL,
+  participant_b_id TEXT NOT NULL,
+  topic TEXT NOT NULL CHECK (topic IN ('purchase', 'job', 'investment')),
+  initiating_trigger_event_id TEXT NOT NULL,
+  term_bounds_canonical TEXT NOT NULL,
+  max_turns INTEGER NOT NULL CHECK (max_turns BETWEEN 1 AND 6),
+  output_token_budget INTEGER NOT NULL CHECK (output_token_budget BETWEEN 1 AND 4096),
+  output_tokens_used INTEGER NOT NULL DEFAULT 0
+    CHECK (output_tokens_used BETWEEN 0 AND output_token_budget),
+  turns INTEGER NOT NULL DEFAULT 0 CHECK (turns BETWEEN 0 AND max_turns),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'concluded', 'expired', 'force_closed')),
+  outcome_canonical TEXT,
+  close_reason TEXT CHECK (close_reason IS NULL OR close_reason IN (
+    'agreement', 'declined', 'max_turns', 'token_budget', 'no_progress',
+    'provider_fallback', 'invalid_proposal', 'expired'
+  )),
+  start_tick INTEGER NOT NULL CHECK (start_tick >= 0),
+  end_tick INTEGER CHECK (end_tick IS NULL OR end_tick >= start_tick),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  source_event_id TEXT NOT NULL,
+  terminal_event_id TEXT,
+  PRIMARY KEY (run_id, id),
+  FOREIGN KEY (run_id, participant_a_id) REFERENCES agents(run_id, id),
+  FOREIGN KEY (run_id, participant_b_id) REFERENCES agents(run_id, id),
+  FOREIGN KEY (run_id, initiating_trigger_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (run_id, terminal_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  CHECK (participant_a_id <> participant_b_id),
+  CHECK (
+    (status = 'active' AND outcome_canonical IS NULL AND close_reason IS NULL
+      AND end_tick IS NULL AND terminal_event_id IS NULL) OR
+    (status <> 'active' AND outcome_canonical IS NOT NULL AND close_reason IS NOT NULL
+      AND end_tick IS NOT NULL AND terminal_event_id IS NOT NULL)
+  )
+);
+INSERT INTO conversations_v32(
+  run_id, id, participant_a_id, participant_b_id, topic,
+  initiating_trigger_event_id, term_bounds_canonical, max_turns,
+  output_token_budget, output_tokens_used, turns, status,
+  outcome_canonical, close_reason, start_tick, end_tick, revision,
+  source_event_id, terminal_event_id
+)
+SELECT
+  run_id, id, participant_a_id, participant_b_id, topic,
+  initiating_trigger_event_id, term_bounds_canonical, max_turns,
+  output_token_budget, output_tokens_used, turns, status,
+  outcome_canonical, close_reason, start_tick, end_tick, revision,
+  source_event_id, terminal_event_id
+FROM conversations;
+DROP TABLE conversations;
+ALTER TABLE conversations_v32 RENAME TO conversations;
+
+CREATE INDEX conversations_active
+  ON conversations(run_id, status, start_tick, id);
+CREATE INDEX conversations_participant_a
+  ON conversations(run_id, participant_a_id, start_tick DESC, id DESC);
+CREATE INDEX conversations_participant_b
+  ON conversations(run_id, participant_b_id, start_tick DESC, id DESC);
+CREATE TRIGGER conversations_identity_immutable
+BEFORE UPDATE OF run_id, id, participant_a_id, participant_b_id, topic,
+  initiating_trigger_event_id, term_bounds_canonical, max_turns,
+  output_token_budget, start_tick, source_event_id ON conversations
+BEGIN SELECT RAISE(ABORT, 'conversation identity and limits are immutable'); END;
+CREATE TRIGGER conversations_transition_valid
+BEFORE UPDATE ON conversations
+WHEN OLD.status <> 'active' OR NEW.revision <> OLD.revision + 1 OR
+  NEW.turns < OLD.turns OR NEW.output_tokens_used < OLD.output_tokens_used
+BEGIN SELECT RAISE(ABORT, 'invalid conversation transition'); END;
+CREATE TRIGGER conversations_no_delete BEFORE DELETE ON conversations
+BEGIN SELECT RAISE(ABORT, 'conversations cannot be deleted'); END;
+
+CREATE TABLE investment_proposals (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (id GLOB 'prop_[0-9a-z]*' AND length(id) >= 13),
+  company_id TEXT NOT NULL CHECK (
+    (substr(company_id, 1, 3) = 'co_' AND length(company_id) >= 11) OR
+    (substr(company_id, 1, 4) = 'biz_' AND length(company_id) >= 7)
+  ),
+  founder_agent_id TEXT NOT NULL,
+  firm_id TEXT NOT NULL,
+  fund_id TEXT NOT NULL,
+  vc_partner_agent_id TEXT NOT NULL,
+  ask_amount_cents TEXT NOT NULL CHECK (
+    ask_amount_cents GLOB '[1-9]*' AND ask_amount_cents NOT GLOB '*[^0-9]*' AND
+    (length(ask_amount_cents) < 19 OR
+      (length(ask_amount_cents) = 19 AND ask_amount_cents <= '9223372036854775807'))
+  ),
+  pre_money_valuation_cents TEXT NOT NULL CHECK (
+    pre_money_valuation_cents GLOB '[1-9]*' AND
+    pre_money_valuation_cents NOT GLOB '*[^0-9]*' AND
+    (length(pre_money_valuation_cents) < 19 OR
+      (length(pre_money_valuation_cents) = 19 AND
+        pre_money_valuation_cents <= '9223372036854775807'))
+  ),
+  initial_equity_basis_points INTEGER NOT NULL
+    CHECK (initial_equity_basis_points BETWEEN 1 AND 9999),
+  status TEXT NOT NULL CHECK (status IN (
+    'proposed', 'negotiating', 'agreed', 'completed', 'rejected', 'expired'
+  )),
+  negotiation_conversation_id TEXT CHECK (
+    negotiation_conversation_id IS NULL OR
+    (negotiation_conversation_id GLOB 'cnv_[0-9a-z]*' AND
+      length(negotiation_conversation_id) >= 12)
+  ),
+  final_terms_canonical TEXT,
+  proposed_tick INTEGER NOT NULL CHECK (proposed_tick >= 0),
+  expires_tick INTEGER NOT NULL CHECK (expires_tick > proposed_tick),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  source_event_id TEXT NOT NULL,
+  last_transition_event_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, negotiation_conversation_id),
+  FOREIGN KEY (run_id, founder_agent_id) REFERENCES agents(run_id, id),
+  FOREIGN KEY (run_id, vc_partner_agent_id) REFERENCES agents(run_id, id),
+  FOREIGN KEY (run_id, firm_id) REFERENCES vc_firms(run_id, id),
+  FOREIGN KEY (run_id, fund_id) REFERENCES vc_funds(run_id, id),
+  FOREIGN KEY (run_id, negotiation_conversation_id) REFERENCES conversations(run_id, id),
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (run_id, last_transition_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  CHECK (founder_agent_id <> vc_partner_agent_id),
+  CHECK (
+    (status = 'proposed' AND negotiation_conversation_id IS NULL AND
+      final_terms_canonical IS NULL) OR
+    (status IN ('negotiating', 'rejected', 'expired') AND
+      negotiation_conversation_id IS NOT NULL AND final_terms_canonical IS NULL) OR
+    (status IN ('agreed', 'completed') AND negotiation_conversation_id IS NOT NULL AND
+      final_terms_canonical IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX investment_proposals_active_company
+  ON investment_proposals(run_id, company_id)
+  WHERE status IN ('proposed', 'negotiating', 'agreed');
+CREATE INDEX investment_proposals_pipeline
+  ON investment_proposals(run_id, status, expires_tick, id);
+CREATE INDEX investment_proposals_fund
+  ON investment_proposals(run_id, fund_id, proposed_tick, id);
+
+CREATE TRIGGER investment_proposals_validate_company
+BEFORE INSERT ON investment_proposals
+WHEN NOT EXISTS (
+  SELECT 1 FROM opening_company_equity_stakes opening
+  WHERE opening.run_id = NEW.run_id AND opening.company_id = NEW.company_id
+    AND opening.owner_agent_id = NEW.founder_agent_id
+) AND NOT EXISTS (
+  SELECT 1 FROM companies company
+  WHERE company.run_id = NEW.run_id AND company.id = NEW.company_id
+    AND company.founder_agent_id = NEW.founder_agent_id AND company.status = 'active'
+)
+BEGIN SELECT RAISE(ABORT, 'investment proposal company or founder is invalid'); END;
+CREATE TRIGGER investment_proposals_validate_partner
+BEFORE INSERT ON investment_proposals
+WHEN NOT EXISTS (
+  SELECT 1 FROM agents partner
+  WHERE partner.run_id = NEW.run_id AND partner.id = NEW.vc_partner_agent_id
+    AND partner.organization_id = NEW.firm_id AND partner.role_code = 'vc.partner'
+)
+BEGIN SELECT RAISE(ABORT, 'investment proposal VC partner is unauthorized'); END;
+CREATE TRIGGER investment_proposals_identity_immutable
+BEFORE UPDATE OF run_id, id, company_id, founder_agent_id, firm_id, fund_id,
+  vc_partner_agent_id, ask_amount_cents, pre_money_valuation_cents,
+  initial_equity_basis_points, proposed_tick, expires_tick, source_event_id
+ON investment_proposals
+BEGIN SELECT RAISE(ABORT, 'investment proposal identity and pitch terms are immutable'); END;
+CREATE TRIGGER investment_proposals_transition_valid
+BEFORE UPDATE ON investment_proposals
+WHEN NEW.revision <> OLD.revision + 1 OR
+  NEW.last_transition_event_id = OLD.last_transition_event_id OR
+  (OLD.negotiation_conversation_id IS NOT NULL AND
+    NEW.negotiation_conversation_id IS NOT OLD.negotiation_conversation_id) OR
+  (OLD.final_terms_canonical IS NOT NULL AND NEW.status <> 'rejected' AND
+    NEW.final_terms_canonical IS NOT OLD.final_terms_canonical) OR
+  NOT (
+    (OLD.status = 'proposed' AND NEW.status = 'negotiating') OR
+    (OLD.status = 'negotiating' AND NEW.status IN ('agreed', 'rejected', 'expired')) OR
+    (OLD.status = 'agreed' AND NEW.status IN ('completed', 'rejected'))
+  )
+BEGIN SELECT RAISE(ABORT, 'invalid investment proposal transition'); END;
+CREATE TRIGGER investment_proposals_no_delete BEFORE DELETE ON investment_proposals
+BEGIN SELECT RAISE(ABORT, 'investment proposals cannot be deleted'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -4064,6 +4256,12 @@ const MIGRATIONS: readonly Migration[] = [
     name: "phase_8_venture_funds",
     sql: PHASE_8_VENTURE_FUNDS,
   },
+  {
+    version: 32,
+    name: "phase_8_investment_proposals",
+    sql: PHASE_8_INVESTMENT_PROPOSALS,
+    requiresForeignKeysOff: true,
+  },
 ];
 
 interface AppliedMigrationRow {
@@ -4135,10 +4333,30 @@ export function runMigrations(db: WorldDatabase): void {
   );
   for (const migration of MIGRATIONS) {
     if (appliedVersions.has(migration.version)) continue;
-    db.transaction(() => {
-      db.exec(migration.sql);
-      insert.run(migration.version, migration.name, sha256Hex(migration.sql));
-    }).immediate();
+    if (migration.requiresForeignKeysOff) db.pragma("foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        db.exec(migration.sql);
+        if (migration.requiresForeignKeysOff) {
+          const violations = db.prepare<[], {
+            table: string;
+            rowid: bigint | null;
+            parent: string;
+            fkid: bigint;
+          }>("PRAGMA foreign_key_check").all();
+          if (violations.length > 0) {
+            throw new EngineError(
+              "CONFLICT",
+              `migration ${migration.version} violates foreign-key integrity`,
+              { violations },
+            );
+          }
+        }
+        insert.run(migration.version, migration.name, sha256Hex(migration.sql));
+      }).immediate();
+    } finally {
+      if (migration.requiresForeignKeysOff) db.pragma("foreign_keys = ON");
+    }
   }
 }
 

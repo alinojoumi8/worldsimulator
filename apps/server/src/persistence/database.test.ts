@@ -1,14 +1,32 @@
-import { mkdtempSync, rmSync } from "node:fs";
+﻿import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { EngineError } from "@worldtangle/shared";
+import {
+  EngineError,
+  IdFactory,
+  Rng,
+  type EventEnvelope,
+} from "@worldtangle/shared";
+import {
+  deterministicConversationOutcome,
+  generateRiverbendPopulation,
+  simDateForTick,
+  type TickContext,
+} from "@worldtangle/engine";
+import { SqliteAgentStore } from "./agent-store";
+import { SqliteConversationStore } from "./conversation-store";
+import { SqliteEventStore } from "./event-store";
 import {
   openDatabaseFile,
   openWorldDatabase,
   worldDatabasePath,
 } from "./database";
-import { insertTestRun, TEST_RUN_ID } from "./test-helpers";
+import {
+  insertTestRun,
+  TEST_RUN_ID,
+  TEST_SIMULATION_ID,
+} from "./test-helpers";
 
 const temporaryDirectories: string[] = [];
 
@@ -46,7 +64,7 @@ describe("world database", () => {
     expect(
       db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations").get()
         ?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     db.close();
 
     const reopened = openWorldDatabase(dataDir, "sim_00000001", "run_00000001");
@@ -54,7 +72,7 @@ describe("world database", () => {
       reopened
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     reopened.close();
   });
 
@@ -73,7 +91,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     const triggerNames = upgraded
       .prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema
@@ -100,7 +118,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     expect(
       upgraded.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'api_tasks'
@@ -124,7 +142,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_response_cache'
@@ -153,7 +171,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     const names = upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name LIKE 'llm_%'
@@ -189,7 +207,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_call_records'
@@ -253,7 +271,7 @@ describe("world database", () => {
     `).all().map((row) => row.name);
     upgraded.close();
 
-    expect(migrationCount).toBe(31n);
+    expect(migrationCount).toBe(32n);
     expect(tableNames).toEqual([
       "conversation_bindings",
       "conversation_inbox",
@@ -284,7 +302,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'conversation_bindings'
@@ -322,7 +340,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -351,7 +369,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -389,7 +407,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -434,7 +452,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -510,7 +528,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -551,7 +569,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -580,7 +598,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
     upgraded.close();
   });
 
@@ -614,7 +632,133 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(31n);
+    ).toBe(32n);
+    upgraded.close();
+  });
+
+  it("upgrades a version-31 database with investment conversations and proposals", () => {
+    const path = join(temporaryDirectory(), "investment-proposal-upgrade.db");
+    const db = openDatabaseFile(path);
+    insertTestRun(db);
+    const population = generateRiverbendPopulation({ runId: TEST_RUN_ID, seed: 42 });
+    const agentTriggers = new Map(population.residents.map((resident) => [
+      resident.agent.id,
+      `evt_${(resident.rosterIndex + 1).toString(36).padStart(8, "0")}`,
+    ]));
+    new SqliteAgentStore(db, TEST_RUN_ID).insertPopulation(population, agentTriggers);
+    const ids = IdFactory.restore(population.idState);
+    const eventStore = new SqliteEventStore(db, TEST_RUN_ID);
+    const triggerEventId = ids.next("evt");
+    eventStore.append({
+      eventId: triggerEventId,
+      type: "migration.conversation.triggered",
+      schemaVersion: 1,
+      simulationId: TEST_SIMULATION_ID,
+      runId: TEST_RUN_ID,
+      seq: 0,
+      tick: 0,
+      simDate: simDateForTick(0),
+      wallTime: "T0",
+      actor: { kind: "system", id: "migration-test" },
+      correlationId: "migration-conversation",
+      payload: { purpose: "preserve-child-foreign-keys" },
+    });
+    const context = (tick: number): TickContext => ({
+      simulationId: TEST_SIMULATION_ID,
+      runId: TEST_RUN_ID,
+      tick,
+      simDate: simDateForTick(tick),
+      phase: "decisions",
+      ids,
+      rng: (key) => Rng.root(42).fork(`${tick}.decisions.${key}`),
+      count: () => undefined,
+      setDigestIndicators: () => undefined,
+      emit: (type, payload, options) => {
+        const event: EventEnvelope = {
+          eventId: ids.next("evt"),
+          type,
+          schemaVersion: options?.schemaVersion ?? 1,
+          simulationId: TEST_SIMULATION_ID,
+          runId: TEST_RUN_ID,
+          seq: eventStore.count(),
+          tick,
+          simDate: simDateForTick(tick),
+          wallTime: `T${tick}`,
+          actor: options?.actor ?? { kind: "system", id: "migration-test" },
+          correlationId: options?.correlationId ?? "migration-conversation",
+          ...(options?.causationId === undefined
+            ? {}
+            : { causationId: options.causationId }),
+          payload,
+        };
+        eventStore.append(event);
+        return event;
+      },
+    });
+    const conversations = new SqliteConversationStore(db, TEST_RUN_ID);
+    const conversation = conversations.open({
+      participantAgentIds: [
+        population.residents[0]!.agent.id,
+        population.residents[1]!.agent.id,
+      ],
+      topic: "purchase",
+      initiatingTriggerEventId: triggerEventId,
+      termBounds: {
+        kind: "purchase",
+        referenceId: "migration-offer",
+        minQuantity: 1,
+        maxQuantity: 2,
+        minUnitPriceCents: "100",
+        maxUnitPriceCents: "200",
+      },
+      maxTurns: 6,
+      outputTokenBudget: 4_096,
+      startTick: 0,
+    }, context(0));
+    conversations.close({
+      conversationId: conversation.id,
+      closeReason: "declined",
+      outcome: deterministicConversationOutcome(
+        "declined",
+        null,
+        "Migration fixture declined without an agreement.",
+      ),
+    }, context(1));
+    const relationshipHistoryCount = db.prepare<
+      [string, string],
+      { count: bigint }
+    >(`
+      SELECT COUNT(*) AS count FROM conversation_relationship_history
+      WHERE run_id = ? AND conversation_id = ?
+    `).get(TEST_RUN_ID, conversation.id)!.count;
+    expect(relationshipHistoryCount).toBeGreaterThan(0n);
+    db.exec(`
+      DROP TABLE investment_proposals;
+      DELETE FROM schema_migrations WHERE version = 32;
+    `);
+    db.close();
+
+    const upgraded = openDatabaseFile(path);
+    expect(upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name = 'investment_proposals'
+    `).get()?.name).toBe("investment_proposals");
+    const conversationSql = upgraded.prepare<[], { sql: string }>(`
+      SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'conversations'
+    `).get()?.sql ?? "";
+    expect(conversationSql).toContain("'investment'");
+    expect(conversationSql).toContain("'expired'");
+    expect(new SqliteConversationStore(upgraded, TEST_RUN_ID).get(conversation.id))
+      .toMatchObject({ id: conversation.id, topic: "purchase", status: "concluded" });
+    expect(upgraded.prepare<[string, string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM conversation_relationship_history
+      WHERE run_id = ? AND conversation_id = ?
+    `).get(TEST_RUN_ID, conversation.id)?.count).toBe(relationshipHistoryCount);
+    expect(
+      upgraded
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
+        .get()?.count,
+    ).toBe(32n);
     upgraded.close();
   });
 

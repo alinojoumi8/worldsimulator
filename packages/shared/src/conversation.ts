@@ -3,6 +3,10 @@ import { agentIdSchema } from "./agent";
 import { decisionIdSchema } from "./decision";
 import { llmCallIdSchema } from "./llm-call";
 import { runIdSchema } from "./simulation";
+import {
+  investmentStructuredTermsSchema,
+  investmentTermBoundsSchema,
+} from "./venture";
 
 export const MAX_CONVERSATION_TURNS = 6;
 export const MAX_CONVERSATION_OUTPUT_TOKENS = 4_096;
@@ -11,7 +15,7 @@ export const CONVERSATION_TOPIC_COOLDOWN_TICKS = 7;
 
 export const conversationIdSchema = z.string().regex(/^cnv_[0-9a-z]{8,}$/);
 export const conversationMessageIdSchema = z.string().regex(/^msg_[0-9a-z]{8,}$/);
-export const conversationTopicSchema = z.enum(["purchase", "job"]);
+export const conversationTopicSchema = z.enum(["purchase", "job", "investment"]);
 export const conversationStatusSchema = z.enum([
   "active",
   "concluded",
@@ -26,6 +30,7 @@ export const conversationCloseReasonSchema = z.enum([
   "no_progress",
   "provider_fallback",
   "invalid_proposal",
+  "expired",
 ]);
 export const conversationOutcomeKindSchema = z.enum([
   "agreement",
@@ -63,6 +68,7 @@ const jobTermBoundsShape = z.object({
 export const conversationTermBoundsSchema = z.discriminatedUnion("kind", [
   purchaseTermBoundsShape,
   jobTermBoundsShape,
+  investmentTermBoundsSchema,
 ]).superRefine((bounds, ctx) => {
   if (bounds.kind === "purchase") {
     if (bounds.minQuantity > bounds.maxQuantity) {
@@ -79,7 +85,10 @@ export const conversationTermBoundsSchema = z.discriminatedUnion("kind", [
         message: "maximum unit price must be at least the minimum",
       });
     }
-  } else if (BigInt(bounds.minAnnualWageCents) > BigInt(bounds.maxAnnualWageCents)) {
+  } else if (
+    bounds.kind === "job" &&
+    BigInt(bounds.minAnnualWageCents) > BigInt(bounds.maxAnnualWageCents)
+  ) {
     ctx.addIssue({
       code: "custom",
       path: ["maxAnnualWageCents"],
@@ -104,6 +113,7 @@ export const jobStructuredTermsSchema = z.object({
 export const conversationStructuredTermsSchema = z.discriminatedUnion("kind", [
   purchaseStructuredTermsSchema,
   jobStructuredTermsSchema,
+  investmentStructuredTermsSchema,
 ]);
 
 export const conversationOutcomeSchema = z.object({

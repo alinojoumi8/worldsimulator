@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  investmentEquityBasisPoints,
+  investmentProposalSchema,
+  investmentStructuredTermsSchema,
   ventureFundDeploymentSchema,
   ventureFundSchema,
 } from "./venture";
@@ -57,5 +60,59 @@ describe("venture contracts", () => {
       deployedTick: 1,
       sourceEventId: "evt_00000002",
     })).toThrow(/must equal/);
+  });
+
+  it("validates investment proposal terms, lifecycle shape, and exact price math", () => {
+    const equityBasisPoints = investmentEquityBasisPoints("10000000", "40000000");
+    expect(equityBasisPoints).toBe(2_000);
+    const finalTerms = investmentStructuredTermsSchema.parse({
+      kind: "investment",
+      referenceId: "prop_00000001",
+      amountCents: "10000000",
+      preMoneyValuationCents: "40000000",
+      equityBasisPoints,
+    });
+    expect(investmentProposalSchema.parse({
+      id: "prop_00000001",
+      runId: "run_00000001",
+      companyId: "co_00000001",
+      founderAgentId: "agt_00000001",
+      firmId: "inst_foundry_capital",
+      fundId: "vfund_00000001",
+      vcPartnerAgentId: "agt_00000002",
+      askAmountCents: "10000000",
+      preMoneyValuationCents: "40000000",
+      initialEquityBasisPoints: equityBasisPoints,
+      status: "agreed",
+      negotiationConversationId: "cnv_00000001",
+      finalTerms,
+      proposedTick: 30,
+      expiresTick: 44,
+      sourceEventId: "evt_00000001",
+      lastTransitionEventId: "evt_00000002",
+    }).status).toBe("agreed");
+    expect(() => investmentStructuredTermsSchema.parse({
+      ...finalTerms,
+      equityBasisPoints: 5_000,
+    })).toThrow(/inconsistent/);
+    expect(() => investmentProposalSchema.parse({
+      id: "prop_00000001",
+      runId: "run_00000001",
+      companyId: "co_00000001",
+      founderAgentId: "agt_00000001",
+      firmId: "inst_foundry_capital",
+      fundId: "vfund_00000001",
+      vcPartnerAgentId: "agt_00000002",
+      askAmountCents: "10000000",
+      preMoneyValuationCents: "40000000",
+      initialEquityBasisPoints: equityBasisPoints,
+      status: "negotiating",
+      negotiationConversationId: null,
+      finalTerms: null,
+      proposedTick: 30,
+      expiresTick: 44,
+      sourceEventId: "evt_00000001",
+      lastTransitionEventId: "evt_00000002",
+    })).toThrow(/negotiation conversation/);
   });
 });

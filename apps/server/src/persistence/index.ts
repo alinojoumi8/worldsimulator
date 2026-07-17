@@ -11,6 +11,7 @@ export * from "./energy-store";
 export * from "./finance-store";
 export * from "./founder-venture-store";
 export * from "./insolvency-store";
+export * from "./investment-proposal-store";
 export * from "./loan-collection-store";
 export * from "./llm-cache-store";
 export * from "./llm-control-store";

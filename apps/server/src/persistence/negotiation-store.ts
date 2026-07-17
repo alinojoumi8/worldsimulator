@@ -196,6 +196,7 @@ export class SqliteNegotiationStore {
       LEFT JOIN conversation_bindings b
         ON b.run_id = c.run_id AND b.conversation_id = c.id
       WHERE c.run_id = ? AND c.status <> 'active' AND b.id IS NULL
+        AND c.topic IN ('purchase', 'job')
       ORDER BY c.end_tick, c.id
     `).all(this.runId).map((row) => row.id);
     return Object.freeze(conversationIds.map((conversationId) => this.bind(
@@ -208,6 +209,12 @@ export class SqliteNegotiationStore {
     const existing = this.getForConversation(conversationId);
     if (existing !== undefined) return existing;
     const conversation = this.conversations.get(conversationId);
+    if (conversation.topic === "investment") {
+      throw new EngineError(
+        "VALIDATION_FAILED",
+        "investment conversations are settled by the proposal pipeline",
+      );
+    }
     if (conversation.status === "active" || conversation.outcome === null) {
       throw new EngineError("CONFLICT", `conversation ${conversationId} is not terminal`);
     }

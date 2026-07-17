@@ -147,4 +147,38 @@ describe("conversation contracts", () => {
       sourceEventId: EVENT_ID,
     })).toThrow();
   });
+
+  it("carries bounded investment positions without granting closing authority", () => {
+    const input = openConversationInputSchema.parse({
+      participantAgentIds: ["agt_00000001", "agt_00000002"],
+      topic: "investment",
+      initiatingTriggerEventId: EVENT_ID,
+      termBounds: {
+        kind: "investment",
+        referenceId: "prop_00000001",
+        minAmountCents: "8000000",
+        maxAmountCents: "10000000",
+        minPreMoneyValuationCents: "32000000",
+        maxPreMoneyValuationCents: "40000000",
+      },
+      maxTurns: 6,
+      outputTokenBudget: 4_096,
+      startTick: 30,
+    });
+    expect(input.topic).toBe("investment");
+    expect(conversationOutcomeSchema.parse({
+      kind: "agreement",
+      structuredTerms: {
+        kind: "investment",
+        referenceId: "prop_00000001",
+        amountCents: "10000000",
+        preMoneyValuationCents: "40000000",
+        equityBasisPoints: 2_000,
+      },
+      extractedBy: "rule",
+      rationale: "The structured position was accepted.",
+      decisionId: null,
+      llmCallId: null,
+    }).structuredTerms).toMatchObject({ equityBasisPoints: 2_000 });
+  });
 });

@@ -4,6 +4,7 @@ import {
   conversationTermBoundsSchema,
   decisionOptionSchema,
   EngineError,
+  investmentEquityBasisPoints,
   tier2DecisionProposalSchema,
   type Conversation,
   type ConversationCloseReason,
@@ -79,25 +80,44 @@ export function conversationTermCandidates(
       },
     ]);
   }
+  if (bounds.kind === "job") {
+    return uniqueTerms([
+      {
+        kind: "job",
+        referenceId: bounds.referenceId,
+        annualWageCents: bounds.minAnnualWageCents,
+      },
+      {
+        kind: "job",
+        referenceId: bounds.referenceId,
+        annualWageCents: midpointBigint(
+          bounds.minAnnualWageCents,
+          bounds.maxAnnualWageCents,
+        ),
+      },
+      {
+        kind: "job",
+        referenceId: bounds.referenceId,
+        annualWageCents: bounds.maxAnnualWageCents,
+      },
+    ]);
+  }
+  const midpointAmount = midpointBigint(bounds.minAmountCents, bounds.maxAmountCents);
+  const midpointPreMoney = midpointBigint(
+    bounds.minPreMoneyValuationCents,
+    bounds.maxPreMoneyValuationCents,
+  );
+  const term = (amountCents: string, preMoneyValuationCents: string) => ({
+    kind: "investment" as const,
+    referenceId: bounds.referenceId,
+    amountCents,
+    preMoneyValuationCents,
+    equityBasisPoints: investmentEquityBasisPoints(amountCents, preMoneyValuationCents),
+  });
   return uniqueTerms([
-    {
-      kind: "job",
-      referenceId: bounds.referenceId,
-      annualWageCents: bounds.minAnnualWageCents,
-    },
-    {
-      kind: "job",
-      referenceId: bounds.referenceId,
-      annualWageCents: midpointBigint(
-        bounds.minAnnualWageCents,
-        bounds.maxAnnualWageCents,
-      ),
-    },
-    {
-      kind: "job",
-      referenceId: bounds.referenceId,
-      annualWageCents: bounds.maxAnnualWageCents,
-    },
+    term(bounds.minAmountCents, bounds.minPreMoneyValuationCents),
+    term(midpointAmount, midpointPreMoney),
+    term(bounds.maxAmountCents, bounds.maxPreMoneyValuationCents),
   ]);
 }
 
@@ -119,6 +139,14 @@ export function termsWithinConversationBounds(
     const wage = BigInt(terms.annualWageCents);
     return wage >= BigInt(bounds.minAnnualWageCents) &&
       wage <= BigInt(bounds.maxAnnualWageCents);
+  }
+  if (bounds.kind === "investment" && terms.kind === "investment") {
+    const amount = BigInt(terms.amountCents);
+    const preMoney = BigInt(terms.preMoneyValuationCents);
+    return amount >= BigInt(bounds.minAmountCents) &&
+      amount <= BigInt(bounds.maxAmountCents) &&
+      preMoney >= BigInt(bounds.minPreMoneyValuationCents) &&
+      preMoney <= BigInt(bounds.maxPreMoneyValuationCents);
   }
   return false;
 }

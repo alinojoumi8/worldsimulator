@@ -806,10 +806,19 @@ function logicalStateHash(
       FROM vc_fund_deployments
       WHERE run_id = ? ORDER BY deployed_tick, id
     `),
+    investmentProposals: logicalRows(db, runId, `
+      SELECT id, company_id, founder_agent_id, firm_id, fund_id,
+        vc_partner_agent_id, ask_amount_cents, pre_money_valuation_cents,
+        initial_equity_basis_points, status, negotiation_conversation_id,
+        final_terms_canonical, proposed_tick, expires_tick, revision,
+        source_event_id, last_transition_event_id
+      FROM investment_proposals
+      WHERE run_id = ? ORDER BY proposed_tick, id
+    `),
   };
 
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 23,
+    stateHashVersion: 24,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
     scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),

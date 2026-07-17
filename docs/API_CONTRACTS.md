@@ -319,9 +319,10 @@ Rules: payloads are validated at append time; money as string-cents; **no free t
 | `loan.payment.missed` | complete arrears cannot be funded | `{loanId,installmentId,installmentNumber,requiredCents,availableCents,consecutiveMisses,defaultThreshold,missedInstallmentIds,evidence}` |
 | `loan.defaulted` | 3rd consecutive miss | `{defaultId,loanId,borrowerKind,borrowerId,bankId,defaultTick,outstandingPrincipalCents,consecutiveMisses,missedInstallmentIds,writeDownTransactionId,lossAccountId,creditScoreBefore,creditScorePenaltyPoints,creditScoreAfter,evidence}` |
 | `agent.credit_score.penalized` | a personal-loan default applies the bounded persisted penalty | `{agentId,loanId,defaultId,scoreBefore,penaltyPoints,scoreAfter,floor,evidence}` |
-| `investment.proposed` [V1] | pitch accepted for review | `{proposalId, companyId, vcId, askAmount, preMoneyValuation}` |
+| `investment.proposed` [V1] | bounded pitch accepted for negotiation | `{proposalId,companyId,founderAgentId,firmId,fundId,vcPartnerAgentId,askAmountCents,preMoneyValuationCents,equityBasisPoints,proposedTick,expiresTick,evidence}` |
+| `investment.proposal.agreed` [V1] | bounded terms accepted, awaiting atomic close | `{proposalId,companyId,negotiationConversationId,finalTerms:{kind,referenceId,amountCents,preMoneyValuationCents,equityBasisPoints},evidence}` |
 | `investment.completed` [V1] | closed | `{investmentId, proposalId, amount, sharesIssued, pricePerShare, capTableAfter}` |
-| `investment.rejected` [V1] | negotiation failed | `{proposalId, reason, negotiationConversationId}` |
+| `investment.rejected` [V1] | negotiation failed or expired | `{proposalId,companyId,negotiationConversationId,reason,status:rejected|expired,evidence}` |
 | `contract.drafted` | law firm output | `{contractId, type, parties, fee, drafterId}` |
 | `contract.signed` | all parties signed | `{contractId, type, effectiveTick}` |
 | `contract.terminated` | ended | `{contractId, reason, byPartyId?}` |
