@@ -18,6 +18,7 @@ import { SqliteFinanceStore } from "./finance-store";
 import { SqliteInsolvencyStore } from "./insolvency-store";
 import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4Store } from "./phase4-store";
+import { SqliteVentureStore } from "./venture-store";
 import { SqliteWorldEventStore } from "./world-event-store";
 
 interface NamedRow {
@@ -781,6 +782,29 @@ export class SqlitePhase4ReadStore {
         lendingHalted: bank.lendingHalted,
       };
     }
+    if (catalog.kind === "vc_firm") {
+      const venture = new SqliteVentureStore(this.db, this.runId);
+      const firm = venture.listFirms().find((candidate) => candidate.id === catalog.id);
+      if (firm === undefined) return { initialized: false };
+      const funds = venture.listFunds(firm.id);
+      const fundSizeCents = funds.reduce(
+        (total, fund) => total + BigInt(fund.fundSizeCents),
+        0n,
+      );
+      const deployedCents = funds.reduce(
+        (total, fund) => total + BigInt(fund.deployedCents),
+        0n,
+      );
+      return {
+        initialized: true,
+        firmId: firm.id,
+        status: firm.status,
+        fundCount: funds.length,
+        fundSizeCents: fundSizeCents.toString(),
+        deployedCents: deployedCents.toString(),
+        availableCents: (fundSizeCents - deployedCents).toString(),
+      };
+    }
     if (catalog.kind === "government") {
       const treasury = this.db.prepare<[string], { balance_cents: string }>(`
         SELECT balance_cents FROM bank_accounts
@@ -828,6 +852,14 @@ export class SqlitePhase4ReadStore {
         capitalRatioMinBp: toSafeNumber(row.capital_ratio_min_bp, "capital ratio"),
         baseLendingRateBp: toSafeNumber(row.base_lending_rate_bp, "lending rate"),
         exposureCapCents: row.exposure_cap_cents,
+      };
+    }
+    if (catalog.kind === "vc_firm") {
+      return {
+        version: 1,
+        authority: "investment_review_only",
+        accountingUnit: "integer_cents",
+        deploymentLimit: "deployed_cents_lte_fund_size_cents",
       };
     }
     if (catalog.kind === "government") {

@@ -404,9 +404,10 @@ Rules: each phase ends **runnable + tests green**; no phase starts before its de
 - **Deps:** Phase 6. **Risks:** believability tuning absorbing unbounded time (timebox; ship envelopes).
 
 ### Phase 8 — Investments and venture capital [V1]
+- **Status (2026-07-16):** WS-801 complete; WS-802 proposal and negotiation pipeline is next.
 - **Goal:** FR-INV: pitch → Tier 3 negotiation → term validation → close → cap table.
 - **Modules:** M10, M05 (negotiation kinds), M11 (investment contracts).
-- **Backend:** proposal pipeline, cap-table math, distributions. **Frontend:** investment pages, cap tables, negotiation transcripts. **API:** investments, proposals. **DB:** vc_firms, proposals, investments, ownership_stakes (already seeded from founding equity).
+- **Backend:** WS-801 now persists run-scoped VC firms, funds, and immutable deployment chains with exact integer-cent accounting and a hard `deployed <= fundSize` database boundary. Remaining work is the proposal pipeline, negotiated close, cap-table math, and distributions. **Frontend:** investment pages, cap tables, negotiation transcripts. **API:** investments, proposals. **DB:** `vc_firms`, `vc_funds`, and `vc_fund_deployments` are live; proposals, investments, and generalized ownership stakes follow in WS-802–804.
 - **Tests:** INV-4 property suite; negotiation-outcome extraction; dilution goldens.
 - **Exit criteria:** default world closes ≥1 negotiated investment in 360 ticks; all math exact.
 - **Deps:** Phase 7. **Risks:** negotiation quality (routing to opus tier for these calls; transcripts reviewable).

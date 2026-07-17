@@ -29,4 +29,5 @@ export * from "./replay";
 export * from "./simulation";
 export * from "./sentiment";
 export * from "./version";
+export * from "./venture";
 export * from "./world-event";

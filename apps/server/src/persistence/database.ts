@@ -3790,6 +3790,152 @@ CREATE TRIGGER export_events_no_delete BEFORE DELETE ON export_events
 BEGIN SELECT RAISE(ABORT, 'export events are append-only'); END;
 `;
 
+const PHASE_8_VENTURE_FUNDS = `
+CREATE TABLE vc_firms (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (substr(id, 1, 5) = 'inst_' AND length(id) >= 8),
+  name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 2 AND 120),
+  status TEXT NOT NULL CHECK (status IN ('active', 'closed')),
+  created_tick INTEGER NOT NULL CHECK (created_tick >= 0),
+  source_event_id TEXT NOT NULL CHECK (
+    substr(source_event_id, 1, 4) = 'evt_' AND length(source_event_id) >= 12
+  ),
+  PRIMARY KEY (run_id, id)
+);
+CREATE TRIGGER vc_firms_identity_immutable
+BEFORE UPDATE OF run_id, id, name, created_tick, source_event_id ON vc_firms
+BEGIN SELECT RAISE(ABORT, 'venture firm identity is immutable'); END;
+CREATE TRIGGER vc_firms_no_delete BEFORE DELETE ON vc_firms
+BEGIN SELECT RAISE(ABORT, 'venture firms cannot be deleted'); END;
+
+CREATE TABLE vc_funds (
+  run_id TEXT NOT NULL,
+  id TEXT NOT NULL CHECK (substr(id, 1, 6) = 'vfund_' AND length(id) >= 14),
+  firm_id TEXT NOT NULL,
+  name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 2 AND 120),
+  fund_size_cents TEXT NOT NULL CHECK (
+    fund_size_cents GLOB '[1-9]*' AND fund_size_cents NOT GLOB '*[^0-9]*' AND
+    (length(fund_size_cents) < 19 OR
+      (length(fund_size_cents) = 19 AND fund_size_cents <= '9223372036854775807'))
+  ),
+  deployed_cents TEXT NOT NULL CHECK (
+    deployed_cents = '0' OR (
+      deployed_cents GLOB '[1-9]*' AND deployed_cents NOT GLOB '*[^0-9]*' AND
+      (length(deployed_cents) < 19 OR
+        (length(deployed_cents) = 19 AND deployed_cents <= '9223372036854775807'))
+    )
+  ),
+  status TEXT NOT NULL CHECK (status IN ('open', 'fully_deployed', 'closed')),
+  created_tick INTEGER NOT NULL CHECK (created_tick >= 0),
+  source_event_id TEXT NOT NULL CHECK (
+    substr(source_event_id, 1, 4) = 'evt_' AND length(source_event_id) >= 12
+  ),
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, firm_id, name),
+  FOREIGN KEY (run_id, firm_id) REFERENCES vc_firms(run_id, id),
+  CHECK (CAST(deployed_cents AS INTEGER) <= CAST(fund_size_cents AS INTEGER)),
+  CHECK (
+    (status = 'open' AND CAST(deployed_cents AS INTEGER) < CAST(fund_size_cents AS INTEGER)) OR
+    (status = 'fully_deployed' AND deployed_cents = fund_size_cents) OR
+    status = 'closed'
+  )
+);
+CREATE INDEX vc_funds_firm_status ON vc_funds(run_id, firm_id, status, id);
+CREATE TRIGGER vc_funds_identity_immutable
+BEFORE UPDATE OF run_id, id, firm_id, name, fund_size_cents, created_tick, source_event_id
+ON vc_funds
+BEGIN SELECT RAISE(ABORT, 'venture fund identity is immutable'); END;
+CREATE TRIGGER vc_funds_deployed_monotonic
+BEFORE UPDATE OF deployed_cents ON vc_funds
+WHEN CAST(NEW.deployed_cents AS INTEGER) < CAST(OLD.deployed_cents AS INTEGER)
+BEGIN SELECT RAISE(ABORT, 'venture fund deployed capital is monotonic'); END;
+CREATE TRIGGER vc_funds_deployment_chain_guard
+BEFORE UPDATE OF deployed_cents ON vc_funds
+WHEN NEW.deployed_cents <> OLD.deployed_cents AND NOT EXISTS (
+  SELECT 1 FROM vc_fund_deployments d
+  WHERE d.run_id = OLD.run_id AND d.fund_id = OLD.id
+    AND d.deployed_before_cents = OLD.deployed_cents
+    AND d.deployed_after_cents = NEW.deployed_cents
+)
+BEGIN SELECT RAISE(ABORT, 'venture fund totals require an immutable deployment'); END;
+CREATE TRIGGER vc_funds_no_delete BEFORE DELETE ON vc_funds
+BEGIN SELECT RAISE(ABORT, 'venture funds cannot be deleted'); END;
+
+CREATE TABLE vc_fund_deployments (
+  run_id TEXT NOT NULL,
+  id TEXT NOT NULL CHECK (substr(id, 1, 5) = 'vdep_' AND length(id) >= 13),
+  fund_id TEXT NOT NULL,
+  target_company_id TEXT NOT NULL CHECK (
+    (substr(target_company_id, 1, 3) = 'co_' AND length(target_company_id) >= 11) OR
+    (substr(target_company_id, 1, 4) = 'biz_' AND length(target_company_id) >= 7)
+  ),
+  reference_id TEXT NOT NULL CHECK (length(trim(reference_id)) BETWEEN 1 AND 160),
+  amount_cents TEXT NOT NULL CHECK (
+    amount_cents GLOB '[1-9]*' AND amount_cents NOT GLOB '*[^0-9]*' AND
+    (length(amount_cents) < 19 OR
+      (length(amount_cents) = 19 AND amount_cents <= '9223372036854775807'))
+  ),
+  deployed_before_cents TEXT NOT NULL CHECK (
+    deployed_before_cents = '0' OR (
+      deployed_before_cents GLOB '[1-9]*' AND
+      deployed_before_cents NOT GLOB '*[^0-9]*'
+    )
+  ),
+  deployed_after_cents TEXT NOT NULL CHECK (
+    deployed_after_cents GLOB '[1-9]*' AND
+    deployed_after_cents NOT GLOB '*[^0-9]*'
+  ),
+  deployed_tick INTEGER NOT NULL CHECK (deployed_tick >= 0),
+  source_event_id TEXT NOT NULL CHECK (
+    substr(source_event_id, 1, 4) = 'evt_' AND length(source_event_id) >= 12
+  ),
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, fund_id, reference_id),
+  FOREIGN KEY (run_id, fund_id) REFERENCES vc_funds(run_id, id),
+  CHECK (
+    CAST(deployed_before_cents AS INTEGER) + CAST(amount_cents AS INTEGER) =
+    CAST(deployed_after_cents AS INTEGER)
+  )
+);
+CREATE INDEX vc_fund_deployments_fund
+  ON vc_fund_deployments(run_id, fund_id, deployed_tick, id);
+CREATE TRIGGER vc_fund_deployments_validate_parent
+BEFORE INSERT ON vc_fund_deployments
+WHEN NOT EXISTS (
+  SELECT 1 FROM vc_funds f
+  WHERE f.run_id = NEW.run_id AND f.id = NEW.fund_id
+    AND f.status = 'open'
+    AND f.deployed_cents = NEW.deployed_before_cents
+    AND CAST(NEW.deployed_after_cents AS INTEGER) <= CAST(f.fund_size_cents AS INTEGER)
+)
+BEGIN SELECT RAISE(ABORT, 'venture deployment exceeds available fund capital'); END;
+CREATE TRIGGER vc_fund_deployments_validate_company
+BEFORE INSERT ON vc_fund_deployments
+WHEN NOT EXISTS (
+  SELECT 1 FROM opening_company_equity o
+  WHERE o.run_id = NEW.run_id AND o.company_id = NEW.target_company_id
+) AND NOT EXISTS (
+  SELECT 1 FROM companies c
+  WHERE c.run_id = NEW.run_id AND c.id = NEW.target_company_id
+)
+BEGIN SELECT RAISE(ABORT, 'venture deployment target company does not exist'); END;
+CREATE TRIGGER vc_fund_deployments_apply_total
+AFTER INSERT ON vc_fund_deployments
+BEGIN
+  UPDATE vc_funds
+  SET deployed_cents = NEW.deployed_after_cents,
+    status = CASE
+      WHEN NEW.deployed_after_cents = fund_size_cents THEN 'fully_deployed'
+      ELSE 'open'
+    END
+  WHERE run_id = NEW.run_id AND id = NEW.fund_id;
+END;
+CREATE TRIGGER vc_fund_deployments_no_update BEFORE UPDATE ON vc_fund_deployments
+BEGIN SELECT RAISE(ABORT, 'venture fund deployments are immutable'); END;
+CREATE TRIGGER vc_fund_deployments_no_delete BEFORE DELETE ON vc_fund_deployments
+BEGIN SELECT RAISE(ABORT, 'venture fund deployments are immutable'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -3912,6 +4058,11 @@ const MIGRATIONS: readonly Migration[] = [
     version: 30,
     name: "phase_7_export_jobs",
     sql: PHASE_7_EXPORT_JOBS,
+  },
+  {
+    version: 31,
+    name: "phase_8_venture_funds",
+    sql: PHASE_8_VENTURE_FUNDS,
   },
 ];
 

@@ -126,7 +126,7 @@ The directory, profile, relationship, and decision endpoints are implemented in 
 
 ### 2.5 Institutions & companies
 
-**GET `/simulations/{simId}/institutions`** — all institutions. Query: `kind?=bank|vc_firm|law_firm|school|news_org|government|market_operator|energy_co`. Response 200: page of `{id,kind,name,staffCount,keyFigures:{…kind-specific summary…}}` ordered `id asc`.
+**GET `/simulations/{simId}/institutions`** — all institutions. Query: `kind?=bank|vc_firm|law_firm|school|news_org|government|market_operator|energy_co`. Response 200: page of `{id,kind,name,staffCount,keyFigures:{…kind-specific summary…}}` ordered `id asc`. VC key figures expose `{initialized,firmId,status,fundCount,fundSizeCents,deployedCents,availableCents}` from authoritative WS-801 fund state.
 
 **GET `/simulations/{simId}/institutions/{institutionId}`** — detail incl. roles: `{institution, officeholders:[{role,agent:{id,name}}], rulebook:{…public parameters…}}`.
 

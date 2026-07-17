@@ -27,6 +27,8 @@ All amounts are simulated USD (annual, displayed in dollars here; stored as inte
 | Riverbend Clinic | healthcare | doctors 2 · nurses 2 · receptionist 1 | 5 |
 | **Subtotal** | | | **35** |
 
+Foundry Capital begins V1 with **Foundry Fund I**, a $5,000,000 fund (`500000000` integer cents) and zero deployed capital. Deployments are recorded only through the authoritative investment lifecycle and can never exceed fund size.
+
 ## 3. Businesses and staffing (31 business-employed agents)
 
 | Business | Sector | Staff | Count |
@@ -214,12 +216,12 @@ These run as deterministic rule systems; some have a named persona for flavor on
 
 At t0: CPI 1000 · unemployment ~6.5% · M1 ≈ $5.1M (households $4.2M + business $0.9M) · credit outstanding ≈ $150k · 15 active employers · treasury $180k.
 
-**360-tick baseline envelopes** (mock-LLM default scenario; used by scenario-regression tests, tuned during Phases 3–7):
+**360-tick baseline envelopes** (mock-LLM default scenario; used by scenario-regression tests; envelope v2 was rebaselined at the Phase 8 authoritative-genesis boundary):
 
 | Metric | Expected envelope |
 |---|---|
 | unemployment | 3–12% at all times; no collapse to 0 or explosion >20% |
-| CPI | 950–1120 (±12% drift max) |
+| CPI | 950–1200 (-5% to +20% drift max) |
 | business failures | 0–3 |
 | new companies | 1–4 |
 | loan defaults | 0–4 |

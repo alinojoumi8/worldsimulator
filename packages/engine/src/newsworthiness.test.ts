@@ -179,6 +179,12 @@ describe("buildNewsworthinessDigest", () => {
     ]) {
       expect(isNewsDigestCandidate(event(10, 10, operationalType, {}))).toBe(false);
     }
+    expect(isNewsDigestCandidate(event(11, 0, "venture.fund.created", {
+      fundSizeCents: "500000000",
+    }))).toBe(false);
+    expect(isNewsDigestCandidate(event(12, 1, "venture.fund.created", {
+      fundSizeCents: "500000000",
+    }))).toBe(true);
 
     const preAggregated = buildNewsworthinessDigest({
       simulationId: SIMULATION_ID,

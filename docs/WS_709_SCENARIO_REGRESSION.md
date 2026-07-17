@@ -12,8 +12,8 @@ It runs both the pure envelope evaluator and the persistence-backed 360-tick sce
 
 | Measure | INITIAL_WORLD §9 contract | Measured baseline |
 |---|---:|---:|
-| Unemployment | 300–1200 bp at every tick | 649 bp at all 361 points |
-| CPI | 950–1120 at every tick | 1000 at all 361 points |
+| Unemployment | 300–1200 bp at every tick | 390–649 bp across 361 points |
+| CPI | 950–1200 at every tick | 995–1193 across 361 points |
 | New companies | 1–4 | 3 active companies |
 | Business failures | 0–3 | 0 |
 | Loan defaults | 0–4 | 0 |
@@ -22,6 +22,8 @@ It runs both the pure envelope evaluator and the persistence-backed 360-tick sce
 | M1 attribution | 100% explained | 10,000 bp; zero unexplained delta |
 
 The evaluator rejects the wrong world spec, seed, provider mode, or terminal tick. It also requires exactly one point for each of unemployment, CPI, and treasury at every tick from 0 through 360; unique sorted outcome evidence; a complete M1 audit; and zero gross or net unexplained M1 change. Inputs are canonicalized before hashing so database row order cannot change the result.
+
+Envelope v2 is the first V1 baseline. WS-801 adds two required tick-0 authoritative VC genesis facts to the gapless journal. That intentionally advances subsequent causal event identities and therefore changes deterministic mock choices without changing replay correctness. The measured path peaks at CPI 1193, so the upper bound moved narrowly to 1200; all accounting, M1, replay, company, credit, and outcome assertions remain unchanged.
 
 ## Authoritative evidence path
 

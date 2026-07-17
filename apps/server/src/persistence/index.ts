@@ -29,4 +29,5 @@ export * from "./scheduler";
 export * from "./sentiment-store";
 export * from "./snapshot-store";
 export * from "./tick-committer";
+export * from "./venture-store";
 export * from "./world-event-store";

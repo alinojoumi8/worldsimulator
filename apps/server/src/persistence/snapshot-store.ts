@@ -790,8 +790,26 @@ function logicalStateHash(
     `),
   };
 
+  const phase8 = {
+    ventureCapitalFirms: logicalRows(db, runId, `
+      SELECT id, name, status, created_tick, source_event_id
+      FROM vc_firms WHERE run_id = ? ORDER BY id
+    `),
+    ventureFunds: logicalRows(db, runId, `
+      SELECT id, firm_id, name, fund_size_cents, deployed_cents, status,
+        created_tick, source_event_id
+      FROM vc_funds WHERE run_id = ? ORDER BY id
+    `),
+    ventureFundDeployments: logicalRows(db, runId, `
+      SELECT id, fund_id, target_company_id, reference_id, amount_cents,
+        deployed_before_cents, deployed_after_cents, deployed_tick, source_event_id
+      FROM vc_fund_deployments
+      WHERE run_id = ? ORDER BY deployed_tick, id
+    `),
+  };
+
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 22,
+    stateHashVersion: 23,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
     scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),
@@ -805,6 +823,7 @@ function logicalStateHash(
     phase5,
     phase6,
     phase7,
+    phase8,
   }));
 }
 

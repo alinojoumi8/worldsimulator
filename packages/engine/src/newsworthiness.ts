@@ -37,6 +37,11 @@ export const NEWS_OPERATIONAL_EVENT_PREFIXES = Object.freeze([
   "trigger.",
 ]);
 
+const NEWS_GENESIS_ONLY_EVENT_TYPES = new Set([
+  "venture.firm.created",
+  "venture.fund.created",
+]);
+
 const ENTITY_ID_SUFFIXES = Object.freeze([
   "agentid",
   "agentids",
@@ -284,7 +289,10 @@ function affectedPoints(affectedCount: number): number {
 }
 
 export function isNewsDigestCandidate(event: EventEnvelope): boolean {
-  return !NEWS_OPERATIONAL_EVENT_PREFIXES.some((prefix) => event.type.startsWith(prefix));
+  return !(
+    (event.tick === 0 && NEWS_GENESIS_ONLY_EVENT_TYPES.has(event.type)) ||
+    NEWS_OPERATIONAL_EVENT_PREFIXES.some((prefix) => event.type.startsWith(prefix))
+  );
 }
 
 /**

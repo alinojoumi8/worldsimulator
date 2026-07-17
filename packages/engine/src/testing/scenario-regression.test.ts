@@ -41,7 +41,7 @@ describe("WS-709 Riverbend baseline envelopes", () => {
       ...input,
       indicatorPoints: [
         ...series("unemployment_rate_bp", "300"),
-        ...series("cpi_index", "1120"),
+        ...series("cpi_index", "1200"),
         ...series("treasury_balance_cents", "0"),
       ],
       businessFailureIds: ["co_fail_1", "co_fail_2", "co_fail_3"],
@@ -73,7 +73,7 @@ describe("WS-709 Riverbend baseline envelopes", () => {
         return { ...point, valueInteger: "299" };
       }
       if (point.key === "cpi_index" && point.tick === 30) {
-        return { ...point, valueInteger: "1121" };
+        return { ...point, valueInteger: "1201" };
       }
       if (point.key === "treasury_balance_cents" && point.tick === 40) {
         return { ...point, valueInteger: "-1" };

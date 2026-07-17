@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "HEAD",
-    "indexed_at": "2026-07-17T08:54:20Z",
+    "commit": "89d10762b4a1ee9cd4bdbbcc20261dbaeb391fcf",
+    "indexed_at": "2026-07-17T12:02:55Z",
     "project": "worldsimulator-phase6-minimax-kimi",
-    "nodes": 5711,
-    "edges": 20357,
-    "original_size": 19464192,
-    "compressed_size": 3456340,
+    "nodes": 5778,
+    "edges": 20542,
+    "original_size": 19529728,
+    "compressed_size": 3490066,
     "compression_level": 3
 }

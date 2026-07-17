@@ -17,6 +17,8 @@ import {
   PROMPT_PACK_VERSION,
   RULESET_VERSION,
   SENTIMENT_TOPICS,
+  ventureFirmCreatedPayloadSchema,
+  ventureFundCreatedPayloadSchema,
   worldEventSchema,
 } from "@worldtangle/shared";
 import type {
@@ -111,6 +113,7 @@ import {
   SqliteSentimentStore,
   SqliteSnapshotStore,
   SqliteTickCommitter,
+  SqliteVentureStore,
   SqliteWorldEventStore,
   WORLD_EVENT_TASK_ORDER,
   WORLD_EVENT_TASK_REF,
@@ -681,6 +684,13 @@ export class SimulationService implements SimulationApi {
           )!.valueInteger,
           sourceEventId: energyEventId,
         });
+        const ventureFirmEventId = ids.next("evt");
+        const ventureFundEventId = ids.next("evt");
+        const venture = new SqliteVentureStore(db, persisted.id).initializeFoundry({
+          ids,
+          firmSourceEventId: ventureFirmEventId,
+          fundSourceEventId: ventureFundEventId,
+        });
         const financeEventInputs: EventInput[] = [
           {
             eventId: energyEventId,
@@ -758,6 +768,33 @@ export class SimulationService implements SimulationApi {
               indicators: finance.indicators,
               evidence: finance.indicatorEvidence,
             },
+          },
+          {
+            eventId: ventureFirmEventId,
+            type: "venture.firm.created",
+            correlationId: requestId,
+            causationId: populationEvent.eventId,
+            actor: SYSTEM_ACTOR,
+            payload: ventureFirmCreatedPayloadSchema.parse({
+              firmId: venture.firm.id,
+              name: venture.firm.name,
+              status: venture.firm.status,
+              evidence: [populationEvent.eventId],
+            }),
+          },
+          {
+            eventId: ventureFundEventId,
+            type: "venture.fund.created",
+            correlationId: requestId,
+            causationId: ventureFirmEventId,
+            actor: { kind: "institution", id: venture.firm.id },
+            payload: ventureFundCreatedPayloadSchema.parse({
+              fundId: venture.fund.id,
+              firmId: venture.firm.id,
+              name: venture.fund.name,
+              fundSizeCents: venture.fund.fundSizeCents,
+              evidence: [ventureFirmEventId],
+            }),
           },
         ];
         const financeEventStart = persisted.nextEventSeq + 3 + agentEvents.length;

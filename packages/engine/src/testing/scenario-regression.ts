@@ -1,6 +1,6 @@
 import { hashValue } from "@worldtangle/shared";
 
-export const RIVERBEND_BASELINE_ENVELOPE_VERSION = 1;
+export const RIVERBEND_BASELINE_ENVELOPE_VERSION = 2;
 
 export const RIVERBEND_BASELINE_ENVELOPE = Object.freeze({
   worldSpec: "riverbend-100@1",
@@ -8,7 +8,7 @@ export const RIVERBEND_BASELINE_ENVELOPE = Object.freeze({
   llmMode: "mock",
   throughTick: 360,
   unemploymentRateBp: Object.freeze({ minimum: 300, maximum: 1_200 }),
-  cpiIndex: Object.freeze({ minimum: 950, maximum: 1_120 }),
+  cpiIndex: Object.freeze({ minimum: 950, maximum: 1_200 }),
   businessFailures: Object.freeze({ minimum: 0, maximum: 3 }),
   newCompanies: Object.freeze({ minimum: 1, maximum: 4 }),
   loanDefaults: Object.freeze({ minimum: 0, maximum: 4 }),
@@ -267,7 +267,7 @@ export function evaluateRiverbendBaseline(
         violations,
         "cpi.outside_envelope",
         "indicatorPoints.cpi_index",
-        `CPI ${value} is outside 950..1120`,
+        `CPI ${value} is outside ${RIVERBEND_BASELINE_ENVELOPE.cpiIndex.minimum}..${RIVERBEND_BASELINE_ENVELOPE.cpiIndex.maximum}`,
       );
       break;
     }

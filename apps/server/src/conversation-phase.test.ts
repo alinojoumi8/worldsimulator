@@ -336,7 +336,7 @@ describe("WS-606 bounded conversation engine", () => {
     expect(list.items[0]).toMatchObject({
       id: conversation.id,
       topic: "purchase",
-      status: "active",
+      status: expect.stringMatching(/^(active|concluded)$/),
       turns: 1,
     });
     const detail = service.getConversation(

@@ -46,7 +46,7 @@ describe("world database", () => {
     expect(
       db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations").get()
         ?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     db.close();
 
     const reopened = openWorldDatabase(dataDir, "sim_00000001", "run_00000001");
@@ -54,7 +54,7 @@ describe("world database", () => {
       reopened
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     reopened.close();
   });
 
@@ -73,7 +73,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     const triggerNames = upgraded
       .prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema
@@ -100,7 +100,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     expect(
       upgraded.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'api_tasks'
@@ -124,7 +124,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_response_cache'
@@ -153,7 +153,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     const names = upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name LIKE 'llm_%'
@@ -189,7 +189,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_call_records'
@@ -253,7 +253,7 @@ describe("world database", () => {
     `).all().map((row) => row.name);
     upgraded.close();
 
-    expect(migrationCount).toBe(30n);
+    expect(migrationCount).toBe(31n);
     expect(tableNames).toEqual([
       "conversation_bindings",
       "conversation_inbox",
@@ -284,7 +284,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'conversation_bindings'
@@ -322,7 +322,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -351,7 +351,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -389,7 +389,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -434,7 +434,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -510,7 +510,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -551,7 +551,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
     upgraded.close();
   });
 
@@ -580,7 +580,41 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(30n);
+    ).toBe(31n);
+    upgraded.close();
+  });
+
+  it("upgrades a version-30 database with constrained venture fund accounting", () => {
+    const path = join(temporaryDirectory(), "venture-fund-upgrade.db");
+    const db = openDatabaseFile(path);
+    db.exec(`
+      DROP TABLE vc_fund_deployments;
+      DROP TABLE vc_funds;
+      DROP TABLE vc_firms;
+      DELETE FROM schema_migrations WHERE version = 31;
+    `);
+    db.close();
+
+    const upgraded = openDatabaseFile(path);
+    expect(upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name LIKE 'vc_%'
+      ORDER BY name
+    `).all().map((row) => row.name)).toEqual([
+      "vc_firms",
+      "vc_fund_deployments",
+      "vc_funds",
+    ]);
+    expect(upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'trigger' AND name LIKE 'vc_%'
+      ORDER BY name
+    `).all().map((row) => row.name)).toContain("vc_fund_deployments_apply_total");
+    expect(
+      upgraded
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
+        .get()?.count,
+    ).toBe(31n);
     upgraded.close();
   });
 

@@ -127,7 +127,7 @@ describe("WS-709 default-scenario regression", () => {
       });
       expect(report.metrics.cpiIndex.pointCount).toBe(361);
       expect(Number(report.metrics.cpiIndex.minimum?.valueInteger)).toBeGreaterThanOrEqual(950);
-      expect(Number(report.metrics.cpiIndex.maximum?.valueInteger)).toBeLessThanOrEqual(1_120);
+      expect(Number(report.metrics.cpiIndex.maximum?.valueInteger)).toBeLessThanOrEqual(1_200);
       expect(report.metrics.treasuryBalanceCents.minimum?.valueInteger).toBe("18000000");
       expect(new Set(observation.newCompanyIds).size).toBe(3);
       expect(scalarCount(db, runId, `

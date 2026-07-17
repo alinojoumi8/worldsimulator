@@ -33,6 +33,7 @@ export * from "./seeded-credit";
 export * from "./sentiment";
 export * from "./sim-loop";
 export * from "./trigger-evaluator";
+export * from "./venture-rules";
 export * from "./testing/invariant-checker";
 export * from "./testing/m1-attribution";
 export * from "./testing/scenario-regression";
