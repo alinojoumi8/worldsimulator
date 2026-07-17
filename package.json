@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:core": "vitest run --exclude apps/server/src/phase3-gates.test.ts --exclude apps/server/src/phase4-gates.test.ts --exclude apps/server/src/scenario-regression.test.ts",
     "test:phase3": "vitest run apps/server/src/phase3-gates.test.ts",
     "test:phase4": "vitest run apps/server/src/phase4-gates.test.ts",
     "test:scenario": "vitest run packages/engine/src/testing/scenario-regression.test.ts apps/server/src/scenario-regression.test.ts",

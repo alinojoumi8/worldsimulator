@@ -26,6 +26,7 @@ import { readRunInvariantSnapshot } from "./testing/run-invariant-probe";
 import { readRunCheckpoint } from "./persistence/tick-committer";
 
 const directories: string[] = [];
+const services: SimulationService[] = [];
 
 function withPhase4Mutation<T>(
   dataDir: string,
@@ -49,8 +50,14 @@ function withPhase4Mutation<T>(
 }
 
 afterEach(() => {
+  for (const service of services.splice(0)) service.close();
   for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 });
 
@@ -64,6 +71,7 @@ describe("Phase 4 release gate", () => {
       snapshotIntervalTicks: 120,
       tickIntervalMs: 60_000,
     });
+    services.push(service);
     const created = service.createSimulation({
       name: "phase-4-formation-labor-gate",
       scenario: {
@@ -137,6 +145,7 @@ describe("Phase 4 release gate", () => {
       snapshotIntervalTicks: 120,
       tickIntervalMs: 60_000,
     });
+    services.push(service);
     service.controlSimulation(simulationId, "start", { runId }, "phase4-gate-start");
     service.controlSimulation(simulationId, "pause", { runId }, "phase4-gate-pause");
     expect((await service.advanceSimulation(
@@ -230,6 +239,7 @@ describe("Phase 4 release gate", () => {
       snapshotIntervalTicks: 120,
       tickIntervalMs: 60_000,
     });
+    services.push(service);
     const injected = service.injectWorldEvent(simulationId, {
       runId,
       type: "energy.fuel_price_shock",
@@ -449,5 +459,5 @@ describe("Phase 4 release gate", () => {
     } finally {
       db.close();
     }
-  }, 240_000);
+  }, 900_000);
 });

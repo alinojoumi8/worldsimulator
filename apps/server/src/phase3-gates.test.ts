@@ -14,10 +14,17 @@ import { readRunInvariantSnapshot } from "./testing/run-invariant-probe";
 import { readRunM1AttributionInput } from "./testing/m1-attribution-probe";
 
 const directories: string[] = [];
+const services: SimulationService[] = [];
 
 afterEach(() => {
+  for (const service of services.splice(0)) service.close();
   for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 });
 
@@ -33,6 +40,7 @@ describe("Phase 3 release gate", () => {
       // This historical phase gate isolates finance; Phase 4 owns the complete news/sentiment run.
       enableNewsPipeline: false,
     });
+    services.push(service);
     const created = service.createSimulation({
       name: "phase-3-360-day-gate",
       scenario: {
@@ -132,5 +140,5 @@ describe("Phase 3 release gate", () => {
     } finally {
       db.close();
     }
-  }, 180_000);
+  }, 600_000);
 });

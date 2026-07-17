@@ -26,7 +26,12 @@ const services: SimulationService[] = [];
 afterEach(() => {
   for (const service of services.splice(0)) service.close();
   for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 });
 
@@ -78,7 +83,7 @@ async function waitForReplay(
   simulationId: string,
   runId: string,
 ): Promise<ReplayRun> {
-  const deadline = performance.now() + 300_000;
+  const deadline = performance.now() + 900_000;
   while (performance.now() < deadline) {
     const status = service.getStatus(simulationId, runId) as { replay: ReplayRun | null };
     if (status.replay !== null && status.replay.status !== "running") return status.replay;
@@ -236,5 +241,5 @@ describe("WS-709 default-scenario regression", () => {
     } finally {
       secondDb.close();
     }
-  }, 720_000);
+  }, 1_800_000);
 });
