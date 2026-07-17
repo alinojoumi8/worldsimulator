@@ -836,10 +836,23 @@ function logicalStateHash(
         ownership_stake_id, completed_tick, source_event_id
       FROM investments WHERE run_id = ? ORDER BY completed_tick, id
     `),
+    investmentDistributions: logicalRows(db, runId, `
+      SELECT id, company_id, amount_cents, total_shares, company_account_id,
+        transaction_id, reference_id, distributed_tick, request_event_id,
+        source_event_id
+      FROM investment_distributions
+      WHERE run_id = ? ORDER BY distributed_tick, id
+    `),
+    investmentDistributionAllocations: logicalRows(db, runId, `
+      SELECT distribution_id, company_id, allocation_index, holder_kind,
+        holder_id, shares, amount_cents, account_id
+      FROM investment_distribution_allocations
+      WHERE run_id = ? ORDER BY distribution_id, allocation_index
+    `),
   };
 
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 25,
+    stateHashVersion: 26,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
     scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),

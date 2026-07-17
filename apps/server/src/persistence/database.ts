@@ -4546,6 +4546,233 @@ CREATE TRIGGER investments_no_delete BEFORE DELETE ON investments
 BEGIN SELECT RAISE(ABORT, 'investments are immutable'); END;
 `;
 
+const PHASE_8_INVESTMENT_DISTRIBUTIONS = `
+CREATE TABLE investment_distributions (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (id GLOB 'dist_[0-9a-z]*' AND length(id) >= 13),
+  company_id TEXT NOT NULL,
+  amount_cents TEXT NOT NULL,
+  total_shares TEXT NOT NULL,
+  company_account_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+  reference_id TEXT NOT NULL CHECK (
+    length(trim(reference_id)) BETWEEN 1 AND 160 AND reference_id = trim(reference_id)
+  ),
+  distributed_tick INTEGER NOT NULL CHECK (distributed_tick >= 0),
+  request_event_id TEXT NOT NULL,
+  source_event_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, company_id, reference_id),
+  UNIQUE (run_id, transaction_id),
+  FOREIGN KEY (run_id, company_id)
+    REFERENCES company_cap_tables(run_id, company_id),
+  FOREIGN KEY (run_id, company_account_id)
+    REFERENCES bank_accounts(run_id, id),
+  FOREIGN KEY (run_id, transaction_id)
+    REFERENCES ledger_transactions(run_id, id),
+  FOREIGN KEY (run_id, request_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  CHECK (
+    amount_cents GLOB '[1-9]*' AND amount_cents NOT GLOB '*[^0-9]*' AND
+    (length(amount_cents) < 19 OR
+      (length(amount_cents) = 19 AND amount_cents <= '9223372036854775807'))
+  ),
+  CHECK (
+    total_shares GLOB '[1-9]*' AND total_shares NOT GLOB '*[^0-9]*' AND
+    (length(total_shares) < 19 OR
+      (length(total_shares) = 19 AND total_shares <= '9223372036854775807'))
+  )
+);
+CREATE INDEX investment_distributions_company
+  ON investment_distributions(run_id, company_id, distributed_tick, id);
+
+CREATE TABLE investment_distribution_allocations (
+  run_id TEXT NOT NULL,
+  distribution_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  allocation_index INTEGER NOT NULL CHECK (allocation_index BETWEEN 0 AND 199),
+  holder_kind TEXT NOT NULL CHECK (holder_kind IN ('agent', 'venture_fund')),
+  holder_id TEXT NOT NULL CHECK (
+    length(trim(holder_id)) BETWEEN 1 AND 120 AND holder_id = trim(holder_id)
+  ),
+  shares TEXT NOT NULL,
+  amount_cents TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, distribution_id, allocation_index),
+  UNIQUE (run_id, distribution_id, holder_kind, holder_id),
+  UNIQUE (run_id, distribution_id, account_id),
+  FOREIGN KEY (run_id, distribution_id)
+    REFERENCES investment_distributions(run_id, id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (run_id, company_id)
+    REFERENCES company_cap_tables(run_id, company_id),
+  FOREIGN KEY (run_id, account_id) REFERENCES bank_accounts(run_id, id),
+  CHECK (
+    shares GLOB '[1-9]*' AND shares NOT GLOB '*[^0-9]*' AND
+    (length(shares) < 19 OR
+      (length(shares) = 19 AND shares <= '9223372036854775807'))
+  ),
+  CHECK (
+    amount_cents = '0' OR (
+      amount_cents GLOB '[1-9]*' AND amount_cents NOT GLOB '*[^0-9]*' AND
+      (length(amount_cents) < 19 OR
+        (length(amount_cents) = 19 AND amount_cents <= '9223372036854775807'))
+    )
+  )
+);
+CREATE INDEX investment_distribution_allocations_holder
+  ON investment_distribution_allocations(run_id, holder_kind, holder_id, distribution_id);
+
+CREATE TRIGGER investment_distribution_allocations_validate_order
+BEFORE INSERT ON investment_distribution_allocations
+WHEN NEW.allocation_index <> (
+  SELECT COUNT(*) FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id
+    AND allocation.distribution_id = NEW.distribution_id
+)
+BEGIN SELECT RAISE(ABORT, 'distribution allocations must be inserted in canonical order'); END;
+
+CREATE TRIGGER investment_distribution_allocations_validate_owner
+BEFORE INSERT ON investment_distribution_allocations
+WHEN NOT EXISTS (
+  SELECT 1 FROM ownership_stakes stake
+  WHERE stake.run_id = NEW.run_id AND stake.company_id = NEW.company_id
+    AND stake.holder_kind = NEW.holder_kind AND stake.holder_id = NEW.holder_id
+  GROUP BY stake.holder_kind, stake.holder_id
+  HAVING CAST(SUM(CAST(stake.shares AS INTEGER)) AS TEXT) = NEW.shares
+)
+BEGIN SELECT RAISE(ABORT, 'distribution allocation does not match current ownership'); END;
+
+CREATE TRIGGER investment_distribution_allocations_validate_account
+BEFORE INSERT ON investment_distribution_allocations
+WHEN (
+  NEW.holder_kind = 'agent' AND NOT EXISTS (
+    SELECT 1 FROM bank_accounts account
+    WHERE account.run_id = NEW.run_id AND account.id = NEW.account_id
+      AND account.owner_kind = 'agent' AND account.owner_id = NEW.holder_id
+      AND account.account_type = 'checking' AND account.status = 'active'
+  )
+) OR (
+  NEW.holder_kind = 'venture_fund' AND NOT EXISTS (
+    SELECT 1 FROM vc_fund_accounts fund_account
+    JOIN bank_accounts account
+      ON account.run_id = fund_account.run_id AND account.id = fund_account.account_id
+    WHERE fund_account.run_id = NEW.run_id AND fund_account.fund_id = NEW.holder_id
+      AND fund_account.account_id = NEW.account_id AND account.status = 'active'
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'distribution allocation recipient account is invalid'); END;
+
+CREATE TRIGGER investment_distributions_validate_exactness
+BEFORE INSERT ON investment_distributions
+WHEN NOT EXISTS (
+  SELECT 1 FROM company_cap_tables cap
+  WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
+    AND cap.total_shares = NEW.total_shares
+) OR NOT EXISTS (
+  SELECT 1 FROM bank_accounts account
+  WHERE account.run_id = NEW.run_id AND account.id = NEW.company_account_id
+    AND account.owner_kind = 'company' AND account.owner_id = NEW.company_id
+    AND account.account_type = 'checking' AND account.status = 'active'
+) OR (
+  SELECT COUNT(*) FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+) = 0 OR CAST((
+  SELECT SUM(CAST(allocation.shares AS INTEGER))
+  FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+) AS TEXT) <> NEW.total_shares OR CAST((
+  SELECT SUM(CAST(allocation.amount_cents AS INTEGER))
+  FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+) AS TEXT) <> NEW.amount_cents
+  OR EXISTS (
+    SELECT 1 FROM investment_distribution_allocations allocation
+    WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+      AND allocation.company_id <> NEW.company_id
+  )
+BEGIN SELECT RAISE(ABORT, 'distribution allocations are not an exact current cap-table split'); END;
+
+CREATE TRIGGER investment_distributions_validate_transaction
+BEFORE INSERT ON investment_distributions
+WHEN NOT EXISTS (
+  SELECT 1 FROM ledger_transactions transaction_row
+  WHERE transaction_row.run_id = NEW.run_id AND transaction_row.id = NEW.transaction_id
+    AND transaction_row.tick = NEW.distributed_tick AND transaction_row.kind = 'dividend'
+    AND transaction_row.actor_kind = 'institution'
+    AND transaction_row.actor_id = NEW.company_id
+    AND transaction_row.reason = 'investment.distribution'
+    AND transaction_row.source_event_id = NEW.request_event_id
+    AND transaction_row.correlation_id = NEW.reference_id
+    AND transaction_row.idempotency_key = 'investment-distribution:' || NEW.id
+) OR NOT EXISTS (
+  SELECT 1 FROM ledger_transaction_legs leg
+  WHERE leg.run_id = NEW.run_id AND leg.transaction_id = NEW.transaction_id
+    AND leg.account_id = NEW.company_account_id AND leg.direction = 'credit'
+    AND leg.amount_cents = NEW.amount_cents
+) OR (
+  SELECT COUNT(*) FROM ledger_transaction_legs leg
+  WHERE leg.run_id = NEW.run_id AND leg.transaction_id = NEW.transaction_id
+) <> 1 + (
+  SELECT COUNT(*) FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+    AND allocation.amount_cents <> '0'
+) OR EXISTS (
+  SELECT 1 FROM investment_distribution_allocations allocation
+  WHERE allocation.run_id = NEW.run_id AND allocation.distribution_id = NEW.id
+    AND allocation.amount_cents <> '0' AND NOT EXISTS (
+      SELECT 1 FROM ledger_transaction_legs leg
+      WHERE leg.run_id = NEW.run_id AND leg.transaction_id = NEW.transaction_id
+        AND leg.account_id = allocation.account_id AND leg.direction = 'debit'
+        AND leg.amount_cents = allocation.amount_cents
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'distribution lacks an exact dividend transaction'); END;
+
+CREATE TRIGGER investment_distributions_validate_event_types
+BEFORE INSERT ON investment_distributions
+WHEN EXISTS (
+  SELECT 1 FROM events event
+  WHERE event.run_id = NEW.run_id AND event.event_id = NEW.request_event_id
+    AND event.type <> 'investment.distribution.requested'
+) OR EXISTS (
+  SELECT 1 FROM events event
+  WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
+    AND event.type <> 'investment.distribution.completed'
+)
+BEGIN SELECT RAISE(ABORT, 'distribution source events have invalid types'); END;
+
+CREATE TRIGGER events_validate_investment_distribution
+BEFORE INSERT ON events
+WHEN EXISTS (
+  SELECT 1 FROM investment_distributions distribution
+  WHERE distribution.run_id = NEW.run_id
+    AND distribution.request_event_id = NEW.event_id
+    AND NEW.type <> 'investment.distribution.requested'
+) OR EXISTS (
+  SELECT 1 FROM investment_distributions distribution
+  WHERE distribution.run_id = NEW.run_id
+    AND distribution.source_event_id = NEW.event_id
+    AND NEW.type <> 'investment.distribution.completed'
+)
+BEGIN SELECT RAISE(ABORT, 'distribution source events have invalid types'); END;
+
+CREATE TRIGGER investment_distributions_no_update
+BEFORE UPDATE ON investment_distributions
+BEGIN SELECT RAISE(ABORT, 'investment distributions are immutable'); END;
+CREATE TRIGGER investment_distributions_no_delete
+BEFORE DELETE ON investment_distributions
+BEGIN SELECT RAISE(ABORT, 'investment distributions are immutable'); END;
+CREATE TRIGGER investment_distribution_allocations_no_update
+BEFORE UPDATE ON investment_distribution_allocations
+BEGIN SELECT RAISE(ABORT, 'investment distribution allocations are immutable'); END;
+CREATE TRIGGER investment_distribution_allocations_no_delete
+BEFORE DELETE ON investment_distribution_allocations
+BEGIN SELECT RAISE(ABORT, 'investment distribution allocations are immutable'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -4685,6 +4912,11 @@ const MIGRATIONS: readonly Migration[] = [
     name: "phase_8_investment_closing",
     sql: PHASE_8_INVESTMENT_CLOSING,
     requiresForeignKeysOff: true,
+  },
+  {
+    version: 34,
+    name: "phase_8_investment_distributions",
+    sql: PHASE_8_INVESTMENT_DISTRIBUTIONS,
   },
 ];
 

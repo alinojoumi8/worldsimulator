@@ -79,6 +79,8 @@ erDiagram
     VentureCapitalFirm ||--o{ InvestmentProposal : evaluates
     InvestmentProposal ||--o| Investment : "closed as"
     Investment ||--|| OwnershipStake : creates
+    Company ||--o{ InvestmentDistribution : declares
+    InvestmentDistribution ||--|| Transaction : "paid by"
     LegalContract }o--o{ Agent : parties
     Company ||--o{ Inventory : stocks
     Inventory }o--|| Product : of
@@ -352,6 +354,12 @@ Any `Company` or `Institution` that may post Jobs. Implemented as a capability f
 - **Fields:** `id`, `companyId`, `holderId` (agent|vc), `shares` (integer), `acquiredVia` (`founding|investment|trade`), `sinceTick`.
 - **Validation:** Σ shares per company = company.totalShares exactly (INV-4); shares > 0; transfers atomic.
 - **Owner:** M10 (M08 writes the founding stake at creation via M10's interface).
+
+#### InvestmentDistribution `dist_`
+- **Purpose:** Immutable historical dividend declaration and exact owner allocation.
+- **Fields:** `id`, `companyId`, `amountCents`, `totalShares`, `companyAccountId`, `transactionId`, `referenceId`, `distributedTick`, `allocations[] {holderKind, holderId, shares, amountCents, accountId}`, `requestEventId`, `sourceEventId`.
+- **Validation:** current stakes are aggregated per beneficial owner and sorted canonically before largest-remainder allocation; allocation shares equal the cap table and allocation cents equal the declared amount exactly; one balanced domestic dividend transaction matches every positive allocation; zero-cent allocations remain auditable without zero-value ledger legs.
+- **Owner:** M10; M09 owns the linked transaction.
 
 ### 3.7 Legal (owner: M11)
 

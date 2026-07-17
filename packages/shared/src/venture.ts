@@ -24,6 +24,7 @@ export const ventureFundIdSchema = z.string().regex(/^vfund_[0-9a-z]{8,}$/);
 export const ventureFundDeploymentIdSchema = z.string().regex(/^vdep_[0-9a-z]{8,}$/);
 export const investmentProposalIdSchema = z.string().regex(/^prop_[0-9a-z]{8,}$/);
 export const investmentIdSchema = z.string().regex(/^inv_[0-9a-z]{8,}$/);
+export const investmentDistributionIdSchema = z.string().regex(/^dist_[0-9a-z]{8,}$/);
 export const ownershipStakeIdSchema = z.string().regex(/^stk_[0-9a-z]{8,}$/);
 export const ventureTargetCompanyIdSchema = z.union([
   companyIdSchema,
@@ -392,6 +393,115 @@ export const investmentSchema = z.object({
 });
 export type Investment = z.infer<typeof investmentSchema>;
 
+export const investmentDistributionRequestSchema = z.object({
+  companyId: ventureTargetCompanyIdSchema,
+  amountCents: positiveCentsSchema,
+  referenceId: z.string().trim().min(1).max(160),
+  causationId: eventIdSchema,
+  evidenceRefs: z.array(eventIdSchema).max(20).default([]),
+}).strict();
+export type InvestmentDistributionRequest = z.infer<
+  typeof investmentDistributionRequestSchema
+>;
+
+const investmentDistributionAllocationBaseSchema = z.object({
+  distributionId: investmentDistributionIdSchema,
+  allocationIndex: z.number().int().nonnegative().max(199).safe(),
+  holderKind: z.enum(["agent", "venture_fund"]),
+  holderId: z.string().trim().min(1).max(120),
+  shares: positiveCentsSchema,
+  amountCents: nonnegativeCentsSchema,
+  accountId: bankAccountSchema.shape.id,
+}).strict();
+
+export const investmentDistributionAllocationSchema =
+  investmentDistributionAllocationBaseSchema.superRefine((allocation, ctx) => {
+  if (
+    allocation.holderKind === "agent" &&
+    !agentIdSchema.safeParse(allocation.holderId).success
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["holderId"],
+      message: "agent allocation requires an agent id",
+    });
+  }
+  if (
+    allocation.holderKind === "venture_fund" &&
+    !ventureFundIdSchema.safeParse(allocation.holderId).success
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["holderId"],
+      message: "venture-fund allocation requires a venture fund id",
+    });
+  }
+  });
+export type InvestmentDistributionAllocation = z.infer<
+  typeof investmentDistributionAllocationSchema
+>;
+
+export const investmentDistributionSchema = z.object({
+  id: investmentDistributionIdSchema,
+  runId: runIdSchema,
+  companyId: ventureTargetCompanyIdSchema,
+  amountCents: positiveCentsSchema,
+  totalShares: positiveCentsSchema,
+  companyAccountId: bankAccountSchema.shape.id,
+  transactionId: ledgerTransactionSchema.shape.id,
+  referenceId: z.string().trim().min(1).max(160),
+  distributedTick: z.number().int().nonnegative().safe(),
+  allocations: z.array(investmentDistributionAllocationSchema).min(1).max(200),
+  requestEventId: eventIdSchema,
+  sourceEventId: eventIdSchema,
+}).strict().superRefine((distribution, ctx) => {
+  const holders = new Set<string>();
+  let allocatedCents = 0n;
+  let allocatedShares = 0n;
+  for (const [index, allocation] of distribution.allocations.entries()) {
+    if (allocation.distributionId !== distribution.id) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "distributionId"],
+        message: "allocation must belong to its distribution",
+      });
+    }
+    if (allocation.allocationIndex !== index) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "allocationIndex"],
+        message: "allocation indexes must be contiguous and canonically ordered",
+      });
+    }
+    const holderKey = `${allocation.holderKind}\u0000${allocation.holderId}`;
+    if (holders.has(holderKey)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "holderId"],
+        message: "each beneficial owner must have one aggregate allocation",
+      });
+    }
+    holders.add(holderKey);
+    allocatedCents += BigInt(allocation.amountCents);
+    allocatedShares += BigInt(allocation.shares);
+  }
+  if (allocatedCents !== BigInt(distribution.amountCents)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["amountCents"],
+      message: "distribution allocations must sum exactly to amountCents",
+    });
+  }
+  if (allocatedShares !== BigInt(distribution.totalShares)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["totalShares"],
+      message: "distribution allocation shares must sum exactly to totalShares",
+    });
+  }
+});
+export type InvestmentDistribution = z.infer<typeof investmentDistributionSchema>;
+
 export const ventureFirmCreatedPayloadSchema = z.object({
   firmId: ventureCapitalFirmIdSchema,
   name: ventureCapitalFirmSchema.shape.name,
@@ -512,6 +622,110 @@ export const investmentCompletedPayloadSchema = z.object({
   }
 });
 
+const investmentDistributionPayloadAllocationSchema =
+  investmentDistributionAllocationBaseSchema.omit({ distributionId: true });
+
+interface InvestmentDistributionPayloadShape {
+  readonly amountCents: string;
+  readonly totalShares: string;
+  readonly allocations: readonly {
+    readonly allocationIndex: number;
+    readonly holderKind: "agent" | "venture_fund";
+    readonly holderId: string;
+    readonly shares: string;
+    readonly amountCents: string;
+  }[];
+}
+
+function validateInvestmentDistributionPayload(
+  payload: InvestmentDistributionPayloadShape,
+  ctx: z.RefinementCtx,
+): void {
+  const holders = new Set<string>();
+  let allocatedCents = 0n;
+  let allocatedShares = 0n;
+  for (const [index, allocation] of payload.allocations.entries()) {
+    if (allocation.allocationIndex !== index) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "allocationIndex"],
+        message: "distribution payload allocation indexes must be contiguous",
+      });
+    }
+    const holderKey = `${allocation.holderKind}\u0000${allocation.holderId}`;
+    if (holders.has(holderKey)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "holderId"],
+        message: "distribution payload owners must be unique",
+      });
+    }
+    holders.add(holderKey);
+    if (
+      allocation.holderKind === "agent" &&
+      !agentIdSchema.safeParse(allocation.holderId).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "holderId"],
+        message: "agent allocation requires an agent id",
+      });
+    }
+    if (
+      allocation.holderKind === "venture_fund" &&
+      !ventureFundIdSchema.safeParse(allocation.holderId).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["allocations", index, "holderId"],
+        message: "venture-fund allocation requires a venture fund id",
+      });
+    }
+    allocatedCents += BigInt(allocation.amountCents);
+    allocatedShares += BigInt(allocation.shares);
+  }
+  if (allocatedCents !== BigInt(payload.amountCents)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["allocations"],
+      message: "distribution payload allocations must sum exactly to amountCents",
+    });
+  }
+  if (allocatedShares !== BigInt(payload.totalShares)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["allocations"],
+      message: "distribution payload allocation shares must sum exactly to totalShares",
+    });
+  }
+}
+
+export const investmentDistributionRequestedPayloadSchema = z.object({
+  distributionId: investmentDistributionIdSchema,
+  companyId: ventureTargetCompanyIdSchema,
+  amountCents: positiveCentsSchema,
+  totalShares: positiveCentsSchema,
+  referenceId: z.string().trim().min(1).max(160),
+  allocations: z.array(
+    investmentDistributionPayloadAllocationSchema.omit({ accountId: true }),
+  ).min(1).max(200),
+  evidence: evidenceSchema,
+}).strict().superRefine(validateInvestmentDistributionPayload);
+
+export const investmentDistributionCompletedPayloadSchema = z.object({
+  distributionId: investmentDistributionIdSchema,
+  companyId: ventureTargetCompanyIdSchema,
+  amountCents: positiveCentsSchema,
+  totalShares: positiveCentsSchema,
+  companyAccountId: bankAccountSchema.shape.id,
+  transactionId: ledgerTransactionSchema.shape.id,
+  referenceId: z.string().trim().min(1).max(160),
+  distributedTick: z.number().int().nonnegative().safe(),
+  allocations: z.array(investmentDistributionPayloadAllocationSchema).min(1).max(200),
+  requestEventId: eventIdSchema,
+  evidence: evidenceSchema,
+}).strict().superRefine(validateInvestmentDistributionPayload);
+
 export type VentureFirmCreatedPayload = z.infer<typeof ventureFirmCreatedPayloadSchema>;
 export type VentureFundCreatedPayload = z.infer<typeof ventureFundCreatedPayloadSchema>;
 export type VentureFundDeployedPayload = z.infer<typeof ventureFundDeployedPayloadSchema>;
@@ -521,3 +735,9 @@ export type InvestmentProposalAgreedPayload = z.infer<
 >;
 export type InvestmentRejectedPayload = z.infer<typeof investmentRejectedPayloadSchema>;
 export type InvestmentCompletedPayload = z.infer<typeof investmentCompletedPayloadSchema>;
+export type InvestmentDistributionRequestedPayload = z.infer<
+  typeof investmentDistributionRequestedPayloadSchema
+>;
+export type InvestmentDistributionCompletedPayload = z.infer<
+  typeof investmentDistributionCompletedPayloadSchema
+>;

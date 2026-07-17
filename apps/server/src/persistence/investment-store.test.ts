@@ -28,6 +28,7 @@ import {
 import { SqliteEventStore } from "./event-store";
 import { SqliteFinanceStore } from "./finance-store";
 import { SqliteConversationStore } from "./conversation-store";
+import { SqliteInvestmentDistributionStore } from "./investment-distribution-store";
 import { SqliteInvestmentProposalStore } from "./investment-proposal-store";
 import { SqliteInvestmentStore } from "./investment-store";
 import { SqlitePhase4Store } from "./phase4-store";
@@ -257,6 +258,7 @@ function fixture(options: { readonly invalidAmount?: boolean } = {}) {
     ids,
     finance,
     companyId: company.company_id,
+    founderAgentId: company.owner_agent_id,
     fund: initialized.fund,
     proposal: agreed,
   };
@@ -423,20 +425,161 @@ describe("SqliteInvestmentStore", () => {
     });
   });
 
+  it("distributes dividends by exact largest remainder with immutable evidence", () => {
+    const base = fixture();
+    const investment = new SqliteInvestmentStore(base.db, TEST_RUN_ID)
+      .processTick(context(base.db, base.ids, 3)).completed[0]!;
+    const companyAccount = base.finance.listAccounts().find((account) => (
+      account.ownerKind === "company" && account.ownerId === base.companyId &&
+      account.type === "checking"
+    ));
+    if (companyAccount === undefined) throw new Error("company account missing");
+    const founderAccount = base.finance.accountForAgent(base.founderAgentId);
+    const balancesBefore = {
+      company: base.finance.accountBalance(companyAccount.id),
+      founder: base.finance.accountBalance(founderAccount.id),
+      fund: base.finance.accountBalance(base.fund.bankAccountId),
+    };
+    const distributions = new SqliteInvestmentDistributionStore(base.db, TEST_RUN_ID);
+    const request = {
+      companyId: base.companyId,
+      amountCents: "7",
+      referenceId: "board-dividend-1",
+      causationId: investment.sourceEventId,
+      evidenceRefs: [investment.sourceEventId],
+    };
+    const distribution = distributions.distribute(
+      request,
+      context(base.db, base.ids, 4),
+    );
+
+    expect(distribution).toMatchObject({
+      companyId: base.companyId,
+      amountCents: "7",
+      totalShares: "12500",
+      companyAccountId: companyAccount.id,
+      referenceId: "board-dividend-1",
+      distributedTick: 4,
+    });
+    expect(distribution.allocations).toEqual([
+      expect.objectContaining({
+        allocationIndex: 0,
+        holderKind: "agent",
+        holderId: base.founderAgentId,
+        shares: "10000",
+        amountCents: "6",
+        accountId: founderAccount.id,
+      }),
+      expect.objectContaining({
+        allocationIndex: 1,
+        holderKind: "venture_fund",
+        holderId: base.fund.id,
+        shares: "2500",
+        amountCents: "1",
+        accountId: base.fund.bankAccountId,
+      }),
+    ]);
+    expect(distribution.allocations.reduce(
+      (sum, allocation) => sum + BigInt(allocation.amountCents),
+      0n,
+    )).toBe(7n);
+    expect(base.finance.accountBalance(companyAccount.id)).toBe(balancesBefore.company - 7n);
+    expect(base.finance.accountBalance(founderAccount.id)).toBe(balancesBefore.founder + 6n);
+    expect(base.finance.accountBalance(base.fund.bankAccountId)).toBe(balancesBefore.fund + 1n);
+    expect(distributions.get(distribution.id)).toEqual(distribution);
+    expect(distributions.list(base.companyId)).toEqual([distribution]);
+
+    const eventsBeforeDuplicate = new SqliteEventStore(base.db, TEST_RUN_ID).count();
+    expect(distributions.distribute(request, context(base.db, base.ids, 5)))
+      .toEqual(distribution);
+    expect(new SqliteEventStore(base.db, TEST_RUN_ID).count()).toBe(eventsBeforeDuplicate);
+    expect(() => distributions.distribute(
+      { ...request, amountCents: "8" },
+      context(base.db, base.ids, 5),
+    )).toThrow(/different amount/);
+
+    const events = new SqliteEventStore(base.db, TEST_RUN_ID).list();
+    const requested = events.find((event) => (
+      event.eventId === distribution.requestEventId
+    ));
+    const completed = events.find((event) => (
+      event.eventId === distribution.sourceEventId
+    ));
+    expect(requested).toMatchObject({
+      type: "investment.distribution.requested",
+      causationId: investment.sourceEventId,
+    });
+    expect(events.find((event) => event.eventId === completed?.causationId)?.type)
+      .toBe("transaction.posted");
+    expect(completed).toMatchObject({
+      type: "investment.distribution.completed",
+      payload: {
+        amountCents: "7",
+        totalShares: "12500",
+        transactionId: distribution.transactionId,
+      },
+    });
+    expect(() => base.db.prepare(`
+      UPDATE investment_distributions SET amount_cents = '8'
+      WHERE run_id = ? AND id = ?
+    `).run(TEST_RUN_ID, distribution.id)).toThrow(/immutable/);
+    expect(() => base.db.prepare(`
+      UPDATE investment_distribution_allocations SET amount_cents = '2'
+      WHERE run_id = ? AND distribution_id = ? AND allocation_index = 1
+    `).run(TEST_RUN_ID, distribution.id)).toThrow(/immutable/);
+  });
+
+  it("rejects an unfunded distribution before consuming IDs or emitting events", () => {
+    const base = fixture();
+    const investment = new SqliteInvestmentStore(base.db, TEST_RUN_ID)
+      .processTick(context(base.db, base.ids, 3)).completed[0]!;
+    const idsBefore = base.ids.serialize();
+    const hashBefore = computeLogicalStateHash(base.db, TEST_RUN_ID);
+    const eventsBefore = new SqliteEventStore(base.db, TEST_RUN_ID).count();
+    const transactionsBefore = base.db.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM ledger_transactions
+    `).get()!.count;
+
+    expect(() => new SqliteInvestmentDistributionStore(base.db, TEST_RUN_ID)
+      .distribute({
+        companyId: base.companyId,
+        amountCents: "9223372036854775807",
+        referenceId: "unfunded-board-dividend",
+        causationId: investment.sourceEventId,
+        evidenceRefs: [investment.sourceEventId],
+      }, context(base.db, base.ids, 4))).toThrow(/cannot fund distribution/);
+
+    expect(base.ids.serialize()).toEqual(idsBefore);
+    expect(computeLogicalStateHash(base.db, TEST_RUN_ID)).toBe(hashBefore);
+    expect(new SqliteEventStore(base.db, TEST_RUN_ID).count()).toBe(eventsBefore);
+    expect(base.db.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM ledger_transactions
+    `).get()!.count).toBe(transactionsBefore);
+    expect(new SqliteInvestmentDistributionStore(base.db, TEST_RUN_ID).list()).toEqual([]);
+  });
+
   it("rolls back, reopens, and restores to an equivalent deterministic close", async () => {
     const base = fixture();
     saveCheckpoint(base.db, base.ids, 2);
     const hashBefore = computeLogicalStateHash(base.db, TEST_RUN_ID);
     const rollbackIds = IdFactory.restore(base.ids.serialize());
     expect(() => base.db.transaction(() => {
-      new SqliteInvestmentStore(base.db, TEST_RUN_ID)
-        .processTick(context(base.db, rollbackIds, 3));
+      const investment = new SqliteInvestmentStore(base.db, TEST_RUN_ID)
+        .processTick(context(base.db, rollbackIds, 3)).completed[0]!;
+      new SqliteInvestmentDistributionStore(base.db, TEST_RUN_ID).distribute({
+        companyId: base.companyId,
+        amountCents: "7",
+        referenceId: "restore-equivalence-dividend",
+        causationId: investment.sourceEventId,
+        evidenceRefs: [investment.sourceEventId],
+      }, context(base.db, rollbackIds, 4));
       throw new Error("force investment rollback");
     }).immediate()).toThrow(/force investment rollback/);
     expect(computeLogicalStateHash(base.db, TEST_RUN_ID)).toBe(hashBefore);
     expect(new SqliteInvestmentProposalStore(base.db, TEST_RUN_ID).get(base.proposal.id))
       .toMatchObject({ status: "agreed" });
     expect(new SqliteInvestmentStore(base.db, TEST_RUN_ID).list()).toEqual([]);
+    expect(new SqliteInvestmentDistributionStore(base.db, TEST_RUN_ID).list()).toEqual([]);
 
     base.db.close();
     const reopened = tracked(openWorldDatabase(
@@ -463,12 +606,21 @@ describe("SqliteInvestmentStore", () => {
       const ids = IdFactory.restore(readRunCheckpoint(db, TEST_RUN_ID).idState);
       const result = new SqliteInvestmentStore(db, TEST_RUN_ID)
         .processTick(context(db, ids, 3));
-      saveCheckpoint(db, ids, 3);
-      return { result, hash: computeLogicalStateHash(db, TEST_RUN_ID) };
+      const distribution = new SqliteInvestmentDistributionStore(db, TEST_RUN_ID)
+        .distribute({
+          companyId: base.companyId,
+          amountCents: "7",
+          referenceId: "restore-equivalence-dividend",
+          causationId: result.completed[0]!.sourceEventId,
+          evidenceRefs: [result.completed[0]!.sourceEventId],
+        }, context(db, ids, 4));
+      saveCheckpoint(db, ids, 4);
+      return { result, distribution, hash: computeLogicalStateHash(db, TEST_RUN_ID) };
     };
     const straight = advance(reopened);
     const fromSnapshot = advance(restored);
     expect(fromSnapshot).toEqual(straight);
     expect(straight.result.completed).toHaveLength(1);
+    expect(straight.distribution.amountCents).toBe("7");
   });
 });

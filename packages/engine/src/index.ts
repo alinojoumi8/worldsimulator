@@ -13,6 +13,7 @@ export * from "./event-log";
 export * from "./finance-rules";
 export * from "./goal-lifecycle";
 export * from "./insolvency-rules";
+export * from "./investment-distributions";
 export * from "./ledger";
 export * from "./loan-collections";
 export * from "./legal-contracts";

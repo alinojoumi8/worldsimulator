@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   capTableSnapshotSchema,
+  investmentDistributionSchema,
   investmentEquityBasisPoints,
   investmentProposalSchema,
   investmentStructuredTermsSchema,
@@ -176,5 +177,53 @@ describe("venture contracts", () => {
       ...founder,
       acquiredVia: "investment",
     })).toThrow(/venture funds/);
+  });
+
+  it("requires exact, canonical investment distribution allocations", () => {
+    const distribution = {
+      id: "dist_00000001",
+      runId: "run_00000001",
+      companyId: "co_00000001",
+      amountCents: "3",
+      totalShares: "4",
+      companyAccountId: "acct_00000001",
+      transactionId: "txn_00000001",
+      referenceId: "board-dividend-1",
+      distributedTick: 20,
+      allocations: [
+        {
+          distributionId: "dist_00000001",
+          allocationIndex: 0,
+          holderKind: "agent" as const,
+          holderId: "agt_00000001",
+          shares: "3",
+          amountCents: "2",
+          accountId: "acct_00000002",
+        },
+        {
+          distributionId: "dist_00000001",
+          allocationIndex: 1,
+          holderKind: "venture_fund" as const,
+          holderId: "vfund_00000001",
+          shares: "1",
+          amountCents: "1",
+          accountId: "acct_00000003",
+        },
+      ],
+      requestEventId: "evt_00000001",
+      sourceEventId: "evt_00000002",
+    };
+    expect(investmentDistributionSchema.parse(distribution).amountCents).toBe("3");
+    expect(() => investmentDistributionSchema.parse({
+      ...distribution,
+      amountCents: "4",
+    })).toThrow(/sum exactly/);
+    expect(() => investmentDistributionSchema.parse({
+      ...distribution,
+      allocations: distribution.allocations.map((allocation) => ({
+        ...allocation,
+        allocationIndex: 0,
+      })),
+    })).toThrow(/contiguous/);
   });
 });
