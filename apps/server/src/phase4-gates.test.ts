@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   IdFactory,
@@ -256,6 +257,9 @@ describe("Phase 4 release gate", () => {
       );
       expect(result.statusCode).toBe(200);
       remaining -= ticks;
+      // The simulation remains deterministic, while Vitest's worker can service
+      // its control channel between CPU-heavy SQLite batches on hosted Windows.
+      await yieldToEventLoop();
     }
     service.close();
 

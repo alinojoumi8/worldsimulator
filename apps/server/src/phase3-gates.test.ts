@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { auditM1Attribution, checkInvariants } from "@worldtangle/engine";
 import { SimulationService } from "./simulation-service";
@@ -66,6 +67,7 @@ describe("Phase 3 release gate", () => {
       );
       expect(result.statusCode).toBe(200);
       remaining -= ticks;
+      await yieldToEventLoop();
     }
     service.close();
 
