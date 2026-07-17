@@ -1,0 +1,111 @@
+{
+  "artifactSchemaVersion": 1,
+  "status": "passed",
+  "executedDate": "2026-07-15",
+  "transport": "Fastify over a real 127.0.0.1 TCP listener using fetch",
+  "scenario": {
+    "worldSpec": "riverbend-100@1",
+    "seed": 42,
+    "llmMode": "mock"
+  },
+  "simulationId": "sim_00000001",
+  "runId": "run_00000001",
+  "tick": 1,
+  "population": {
+    "agents": 100,
+    "uniqueAgentIds": 100,
+    "selectedAgentId": "agt_00000001",
+    "selectedAgentName": "Della Ashcombe",
+    "selectedAgentGoals": 2,
+    "selectedAgentRelationships": 6
+  },
+  "runtime": {
+    "selectedAgentDecisions": 1,
+    "initialMemoryId": "mem_00000001",
+    "outcomeMemoryRecorded": true,
+    "reopenEquivalent": true,
+    "persistedCounts": {
+      "agents": 100,
+      "goals": 198,
+      "relationships": 600,
+      "memories": 200,
+      "decisions": 100,
+      "agent_actions": 100
+    }
+  },
+  "invariants": {
+    "passed": true,
+    "checks": [
+      {
+        "invariant": "INV-1",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-2",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-3",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-4",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-5",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-6",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-7",
+        "status": "inactive",
+        "violations": []
+      },
+      {
+        "invariant": "INV-8",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-9",
+        "status": "passed",
+        "violations": []
+      },
+      {
+        "invariant": "INV-10",
+        "status": "passed",
+        "violations": []
+      }
+    ],
+    "violations": [],
+    "active": [
+      "INV-1",
+      "INV-2",
+      "INV-3",
+      "INV-4",
+      "INV-5",
+      "INV-6",
+      "INV-8",
+      "INV-9",
+      "INV-10"
+    ],
+    "inactive": [
+      "INV-7"
+    ]
+  },
+  "snapshot": {
+    "id": "snap_00000001",
+    "stateHash": "fdfbc083c798b998e6331daf9fdcc7e44d6e7855100680275602e310f9cf32d9",
+    "matchesLiveState": true
+  }
+}

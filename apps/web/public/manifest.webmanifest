@@ -1,0 +1,16 @@
+{
+  "name": "WorldTangle",
+  "short_name": "WorldTangle",
+  "description": "An auditable civic systems simulation workbench.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3efe6",
+  "theme_color": "#0b6b69",
+  "icons": [
+    {
+      "src": "/brand/worldtangle-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# Force LF everywhere: prompt files, fixtures, and world specs are hashed, and
+# CRLF checkouts on Windows would silently change those hashes (ADR-0008).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.db binary
+.codebase-memory/graph.db.zst binary merge=ours

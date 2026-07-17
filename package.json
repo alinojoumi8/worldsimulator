@@ -1,0 +1,40 @@
+{
+  "name": "worldtangle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:phase3": "vitest run apps/server/src/phase3-gates.test.ts",
+    "test:phase4": "vitest run apps/server/src/phase4-gates.test.ts",
+    "test:scenario": "vitest run packages/engine/src/testing/scenario-regression.test.ts apps/server/src/scenario-regression.test.ts",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "smoke:phase2": "tsx scripts/live-phase2-smoke.ts",
+    "acceptance:live-budget": "node --env-file-if-exists=.env --import=tsx scripts/live-budget-acceptance.ts",
+    "acceptance:llm-parity": "node --env-file-if-exists=.env --import=tsx scripts/live-llm-parity.ts",
+    "gate:phase6": "tsx scripts/phase6-acceptance-gate.ts",
+    "gate:mvp": "pnpm typecheck && pnpm lint && pnpm gate:phase6 && pnpm test && pnpm build && pnpm test:e2e",
+    "verify:live-provider": "tsx scripts/contracts/validate-live-riverbend-probe.ts artifacts/live-provider-contract/2026-07-15-riverbend-context.json artifacts/live-provider-contract/2026-07-15-riverbend-candidate.json",
+    "typecheck": "tsc --noEmit && pnpm --filter @worldtangle/web typecheck",
+    "lint": "eslint .",
+    "dev": "pnpm --parallel --filter @worldtangle/server --filter @worldtangle/web dev",
+    "build": "pnpm --filter @worldtangle/web build",
+    "start": "pnpm --filter @worldtangle/server start"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.20.0",
+    "fast-check": "^4.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "artifactSchemaVersion": 1,
+  "status": "passed_with_harness_warning",
+  "executedDate": "2026-07-15",
+  "provider": {
+    "vendor": "OpenAI",
+    "transport": "Codex CLI structured output",
+    "authMode": "ChatGPT",
+    "model": "gpt-5.6-sol",
+    "apiKeyUsed": false
+  },
+  "contract": {
+    "engineSchema": "tier2DecisionProposalSchema",
+    "jsonSchemaPath": "scripts/contracts/tier2-decision-proposal.schema.json",
+    "validationScriptPath": "scripts/contracts/validate-live-provider-probe.ts",
+    "probeInputPath": "artifacts/live-provider-contract/2026-07-15-probe-input.json",
+    "syntheticDataOnly": true,
+    "executorInvocations": 0
+  },
+  "attempts": [
+    {
+      "id": "initial",
+      "threadId": "019f6436-e09e-7713-8542-71e967faaf69",
+      "elapsedMs": 22500,
+      "usage": {
+        "inputTokens": 22783,
+        "cachedInputTokens": 0,
+        "outputTokens": 80,
+        "reasoningOutputTokens": 0
+      },
+      "outputSchemaAccepted": true,
+      "apiEquivalentCostUsd": 0.116315,
+      "operationalWarnings": [
+        "Unrelated local skill discovery inflated the prompt and exceeded the 2 percent skill-context budget."
+      ]
+    },
+    {
+      "id": "reduced_config_retained",
+      "threadId": "019f6437-6532-7140-a2fd-2f012cbded45",
+      "elapsedMs": 16400,
+      "usage": {
+        "inputTokens": 18631,
+        "cachedInputTokens": 0,
+        "outputTokens": 75,
+        "reasoningOutputTokens": 0
+      },
+      "outputSchemaAccepted": true,
+      "engineSchemaAccepted": true,
+      "offeredActionAccepted": true,
+      "registryPreparationAccepted": true,
+      "proposalHash": "7889adb5e8d96cabde4e94a8af98092dbe71fb6cff6f57580fb198c45dbef356",
+      "apiEquivalentCostUsd": 0.095405,
+      "operationalWarnings": [
+        "Ignoring user configuration reduced but did not eliminate unrelated local skill-discovery overhead."
+      ]
+    }
+  ],
+  "aggregateUsage": {
+    "inputTokens": 41414,
+    "cachedInputTokens": 0,
+    "outputTokens": 155,
+    "reasoningOutputTokens": 0
+  },
+  "cost": {
+    "billingCostUsd": null,
+    "billingCostReason": "ChatGPT-authenticated Codex CLI did not report a monetary charge.",
+    "apiEquivalentEstimateUsd": 0.21172,
+    "retainedAttemptApiEquivalentEstimateUsd": 0.095405,
+    "pricingBasis": {
+      "inputUsdPerMillionTokens": 5,
+      "cachedInputUsdPerMillionTokens": 0.5,
+      "outputUsdPerMillionTokens": 30,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "retrievedDate": "2026-07-15"
+    }
+  },
+  "liveValidation": {
+    "source": "live",
+    "selectedActionId": "goal.respond",
+    "selectedActionType": "agent.advance_goal",
+    "validationFailures": [],
+    "fallbackUsed": false
+  },
+  "negativeControl": {
+    "description": "An injected toolCall field plus an empty rationale exercised the same strict boundary without another provider call.",
+    "validationFailures": [
+      {
+        "stage": "proposal_schema",
+        "code": "SCHEMA_INVALID",
+        "issues": [
+          "rationale must contain at least one character",
+          "toolCall is an unrecognized key"
+        ]
+      }
+    ],
+    "fallback": {
+      "source": "tier1_fallback",
+      "selectedActionId": "goal.respond",
+      "selectedActionType": "agent.advance_goal",
+      "rationale": "tier1_fallback_after_proposal_schema"
+    }
+  },
+  "conclusion": {
+    "liveContractPassed": true,
+    "usageCaptured": true,
+    "costCaptured": true,
+    "validationFailureCaptured": true,
+    "fallbackCaptured": true,
+    "followUp": "Use a direct provider API credential for future probes to avoid Codex CLI skill-context overhead."
+  }
+}

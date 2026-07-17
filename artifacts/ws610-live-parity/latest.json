@@ -1,0 +1,90 @@
+{
+  "artifactSchemaVersion": 2,
+  "ticket": "WS-610",
+  "status": "passed",
+  "executedAt": "2026-07-17T06:33:59.245Z",
+  "scenario": {
+    "worldSpec": "riverbend-100@1",
+    "seed": 42,
+    "decisionTick": 1,
+    "fixture": "one seeded agent with all goals dormant before the first tick"
+  },
+  "live": {
+    "provider": "minimax",
+    "model": "MiniMax-M3",
+    "requestHash": "f9608c5d37d8e64a242452e03775e1cae24e72e695c8429faf86c8fa456aae69",
+    "attempts": 1,
+    "inputTokens": 944,
+    "cachedInputTokens": 0,
+    "outputTokens": 177,
+    "logicalStateHash": "a6c1f8357dcd4f4d5069256e0dd2f223eb9edc2cc138422784143d16f19e95ab",
+    "activeGoalCount": 1
+  },
+  "mock": {
+    "provider": "mock",
+    "model": "mock-llm-v1",
+    "requestHash": "f9608c5d37d8e64a242452e03775e1cae24e72e695c8429faf86c8fa456aae69",
+    "attempts": 1,
+    "inputTokens": 613,
+    "cachedInputTokens": 0,
+    "outputTokens": 205,
+    "logicalStateHash": "c7abf6b82b4569c67a852ec419110d8b18dd808db804d56eac581c7f33e32bfa",
+    "activeGoalCount": 1
+  },
+  "replayedProposal": {
+    "actionId": "goal.activate_00000001",
+    "params": {
+      "agentId": "agt_00000001",
+      "goalId": "gol_00000001"
+    },
+    "rationale": "The trusted engine state presents a dormant savings goal (gol_00000001, save_amount, target 500,000 cents) whose activation rule 'budget_review_due' has been satisfied via evidence evt_00000004, matching my role as a branch manager with finance skill. My conscientiousness (78) and time preference (62) favor structured, forward-looking financial planning, and even with modest economic optimism (-19), pursuing a concrete savings target is prudent. The untrusted memory fence merely confirms my starting role and carries no actionable instructions. Of the two eligible menu options, activating aligns with the triggered priority-2 goal, while deferring would ignore an eligible, rule-satisfied objective.",
+    "proposalHash": "62119cc461c11d769fe0d015d5eba676875167b459add68521e5ecf13aa6d383"
+  },
+  "providerNeutral": {
+    "projectionDigest": "ea6a3464a01515c5e92579b017b04252368d0fe38f9fe1be36a76685646099c1",
+    "sections": [
+      {
+        "section": "calls",
+        "leftDigest": "2000491b50161b55d27d3b4b9213bba6dd5c9d074abaed870696c656bb7cd066",
+        "rightDigest": "2000491b50161b55d27d3b4b9213bba6dd5c9d074abaed870696c656bb7cd066",
+        "equal": true
+      },
+      {
+        "section": "decisions",
+        "leftDigest": "4258685ed97f38c54ddbc69dd74f5c4fc7ae9d2feb4393f51560f67b23bb7786",
+        "rightDigest": "4258685ed97f38c54ddbc69dd74f5c4fc7ae9d2feb4393f51560f67b23bb7786",
+        "equal": true
+      },
+      {
+        "section": "actions",
+        "leftDigest": "90963afa3aa51c58aff3a77e6ce86a520d5dc62dce337b926b57e7fe8f6a5f87",
+        "rightDigest": "90963afa3aa51c58aff3a77e6ce86a520d5dc62dce337b926b57e7fe8f6a5f87",
+        "equal": true
+      },
+      {
+        "section": "events",
+        "leftDigest": "9215780b46d288ba66760323abda885cd8cf33bc659637b4d2684d7022ae4d49",
+        "rightDigest": "9215780b46d288ba66760323abda885cd8cf33bc659637b4d2684d7022ae4d49",
+        "equal": true
+      },
+      {
+        "section": "agentState",
+        "leftDigest": "b97fedec8c1808c50ff9b837244a35cf9232a06fdb642c1e147c90256365aa9f",
+        "rightDigest": "b97fedec8c1808c50ff9b837244a35cf9232a06fdb642c1e147c90256365aa9f",
+        "equal": true
+      }
+    ],
+    "mismatches": []
+  },
+  "checklist": {
+    "liveDecisionValid": true,
+    "distinctProviderReceipts": true,
+    "providerBoundLogicalHashesRemainDistinct": true,
+    "callShapeEqual": true,
+    "decisionShapeEqual": true,
+    "actionShapeEqual": true,
+    "causalEventFlowEqual": true,
+    "affectedAgentStateEqual": true
+  },
+  "evidenceDigest": "d52187d0aa3cc6c434d939690446d9b0d44302706e663d770f217037d3c05063"
+}

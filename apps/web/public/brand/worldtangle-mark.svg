@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="worldtangle-mark-title">
+  <title id="worldtangle-mark-title">WorldTangle causal knot</title>
+  <path
+    d="M14 48C4 38 7 21 21 13c11-7 25-4 33 6 8 11 5 25-5 31-7 4-15 3-21-3l-8-8 9-9 10 10"
+    fill="none"
+    stroke="#0B6B69"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="8"
+  />
+  <path
+    d="M50 48c10-10 7-27-7-35-11-7-25-4-33 6-8 11-5 25 5 31 7 4 15 3 21-3l8-8-9-9-10 10"
+    fill="none"
+    stroke="#B94B3B"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="8"
+  />
+  <path
+    d="M22 15c7-4 15-3 22 1"
+    fill="none"
+    stroke="#0B6B69"
+    stroke-linecap="round"
+    stroke-width="8"
+  />
+</svg>

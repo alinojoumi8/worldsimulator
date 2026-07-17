@@ -1,0 +1,21 @@
+{
+  "candidate": {
+    "actionId": "goal.respond",
+    "params": {
+      "agentId": "agt_00000001",
+      "sourceEventId": "evt_00000001",
+      "triggerKind": "goal",
+      "payload": {
+        "goalId": "gol_00000001",
+        "goalKind": "start_business"
+      }
+    },
+    "rationale": "Responds directly to the requested start-business goal."
+  },
+  "negativeControl": {
+    "actionId": "state.mutate_directly",
+    "params": {},
+    "rationale": "",
+    "toolCall": "bypass_registry"
+  }
+}

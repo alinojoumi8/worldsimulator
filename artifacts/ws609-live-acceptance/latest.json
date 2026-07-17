@@ -1,0 +1,71 @@
+{
+  "artifactSchemaVersion": 2,
+  "acceptanceCriterion": "AC-2",
+  "status": "passed",
+  "executedAt": "2026-07-17T03:37:58.319Z",
+  "transport": "Fastify on an ephemeral 127.0.0.1 listener with real MiniMax/Kimi transport",
+  "scenario": {
+    "worldSpec": "riverbend-100@1",
+    "seed": 42,
+    "llmMode": "live",
+    "endTick": 360,
+    "runCostCentsMax": "200",
+    "perAgentDailyTokens": 128000
+  },
+  "simulationId": "sim_00000001",
+  "runId": "run_00000001",
+  "models": {
+    "tier2": "MiniMax-M3",
+    "tier3": "kimi-k2.6"
+  },
+  "providers": {
+    "tier2": "minimax",
+    "tier3": "kimi"
+  },
+  "prices": {
+    "MiniMax-M3": {
+      "inputMicrocentsPerToken": "165000",
+      "cachedInputMicrocentsPerToken": "33000",
+      "outputMicrocentsPerToken": "660000"
+    },
+    "kimi-k2.6": {
+      "inputMicrocentsPerToken": "522500",
+      "cachedInputMicrocentsPerToken": "88000",
+      "outputMicrocentsPerToken": "2200000"
+    }
+  },
+  "pause": {
+    "tick": 301,
+    "runStatus": "paused",
+    "autoPaused": true,
+    "effectiveTier": 1,
+    "budgetPct": 100,
+    "thresholdEventId": "evt_000039li",
+    "pauseEventId": "evt_000039lj",
+    "pauseCausationId": "evt_000039li"
+  },
+  "providerUsage": {
+    "callRecords": 28,
+    "providerAttempts": 2,
+    "cacheHits": 0,
+    "inputTokens": 2142,
+    "cachedInputTokens": 882,
+    "outputTokens": 360
+  },
+  "spendReconciliation": {
+    "recordedCostMicrocents": "474606000",
+    "independentlyPricedMicrocents": "474606000",
+    "absoluteDifferenceMicrocents": "0",
+    "differenceBasisPoints": 0,
+    "withinFivePercent": true,
+    "displayedCostCentsEstimate": "475"
+  },
+  "postPauseProbe": {
+    "graceMs": 2000,
+    "providerAttemptsAtPause": 2,
+    "providerAttemptsAfterGrace": 2,
+    "additionalProviderAttempts": 0,
+    "remainedPaused": true
+  },
+  "evidenceDigest": "913445f696aab6994ec6448a378b1e4f6b6695e14c61be5d7ff9fca440e17b5f"
+}

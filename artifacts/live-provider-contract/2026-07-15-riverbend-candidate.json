@@ -1,0 +1,1 @@
+{"actionId":"goal.no_op","params":{"agentId":"agt_00000001","reason":"utility_below_threshold","sourceEventId":"evt_00000004"},"rationale":"Option 2 has the substantially higher utility and stays within the offered capability boundary."}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorldTangle Riverbend Tier 2 No-op Proposal Probe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["actionId", "params", "rationale"],
+  "properties": {
+    "actionId": { "type": "string", "const": "goal.no_op" },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentId", "reason", "sourceEventId"],
+      "properties": {
+        "agentId": { "type": "string", "const": "agt_00000001" },
+        "reason": { "type": "string", "const": "utility_below_threshold" },
+        "sourceEventId": { "type": "string", "const": "evt_00000004" }
+      }
+    },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 500 }
+  }
+}

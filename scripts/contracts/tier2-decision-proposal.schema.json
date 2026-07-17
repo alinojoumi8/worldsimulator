@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorldTangle Tier 2 Decision Proposal Contract Probe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actionId",
+    "params",
+    "rationale"
+  ],
+  "properties": {
+    "actionId": {
+      "type": "string",
+      "enum": [
+        "goal.respond",
+        "goal.no_op"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "sourceEventId",
+        "triggerKind",
+        "payload"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "const": "agt_00000001"
+        },
+        "sourceEventId": {
+          "type": "string",
+          "const": "evt_00000001"
+        },
+        "triggerKind": {
+          "type": "string",
+          "const": "goal"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goalId",
+            "goalKind"
+          ],
+          "properties": {
+            "goalId": {
+              "type": "string",
+              "const": "gol_00000001"
+            },
+            "goalKind": {
+              "type": "string",
+              "const": "start_business"
+            }
+          }
+        }
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  }
+}
