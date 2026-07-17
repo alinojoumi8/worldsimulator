@@ -23,6 +23,7 @@ export const LEGAL_CONTRACT_TYPES = [
   "employment",
   "service",
   "lease",
+  "investment",
 ] as const;
 export const legalContractTypeSchema = z.enum(LEGAL_CONTRACT_TYPES);
 export type LegalContractType = z.infer<typeof legalContractTypeSchema>;
@@ -87,11 +88,51 @@ export const leaseTermsSchema = z.object({
   message: "lease endTick must be on or after startTick",
 });
 
+export const investmentTermsSchema = z.object({
+  template: z.literal("investment"),
+  proposalId: z.string().regex(/^prop_[0-9a-z]{8,}$/),
+  companyId: z.union([companyIdSchema, z.string().regex(/^biz_[0-9a-z_]{3,}$/)]),
+  investorFundId: z.string().regex(/^vfund_[0-9a-z]{8,}$/),
+  investorFirmId: z.string().regex(/^inst_[0-9a-z_]{3,}$/),
+  amountCents: positiveIntegerString,
+  preMoneyValuationCents: positiveIntegerString,
+  pricePerShareCents: positiveIntegerString,
+  sharesIssued: positiveIntegerString,
+  totalSharesBefore: positiveIntegerString,
+  totalSharesAfter: positiveIntegerString,
+}).strict().superRefine((terms, ctx) => {
+  const price = BigInt(terms.pricePerShareCents);
+  const before = BigInt(terms.totalSharesBefore);
+  const issued = BigInt(terms.sharesIssued);
+  if (price * before !== BigInt(terms.preMoneyValuationCents)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["pricePerShareCents"],
+      message: "share price times pre-round shares must equal pre-money valuation",
+    });
+  }
+  if (price * issued !== BigInt(terms.amountCents)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["sharesIssued"],
+      message: "share price times issued shares must equal investment amount",
+    });
+  }
+  if (before + issued !== BigInt(terms.totalSharesAfter)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["totalSharesAfter"],
+      message: "post-round shares must equal pre-round shares plus issued shares",
+    });
+  }
+});
+
 export const legalContractTermsSchema = z.discriminatedUnion("template", [
   incorporationTermsSchema,
   employmentTermsSchema,
   serviceTermsSchema,
   leaseTermsSchema,
+  investmentTermsSchema,
 ]);
 export type LegalContractTerms = z.infer<typeof legalContractTermsSchema>;
 

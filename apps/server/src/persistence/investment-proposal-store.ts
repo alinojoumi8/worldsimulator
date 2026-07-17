@@ -82,6 +82,12 @@ export interface InvestmentProposalTickResult {
   readonly proposed: InvestmentProposal | null;
 }
 
+export interface InvestmentProposalValidationFailure {
+  readonly code: string;
+  readonly message: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
 function compareCodeUnit(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -297,6 +303,57 @@ export class SqliteInvestmentProposalStore {
           WHERE run_id = ? AND status = ? ORDER BY proposed_tick, id
         `).all(this.runId, status);
     return Object.freeze(rows.map((row) => this.mapRow(row)));
+  }
+
+  rejectAgreed(
+    proposalId: string,
+    validation: InvestmentProposalValidationFailure,
+    ctx: TickContext,
+  ): InvestmentProposal {
+    this.assertContext(ctx);
+    return this.atomic(() => {
+      const proposal = this.get(proposalId);
+      if (proposal.status !== "agreed" || proposal.negotiationConversationId === null) {
+        throw new EngineError(
+          "CONFLICT",
+          `investment proposal ${proposalId} is not awaiting closing validation`,
+        );
+      }
+      const conversation = this.conversations.get(proposal.negotiationConversationId);
+      const payload = investmentRejectedPayloadSchema.parse({
+        proposalId: proposal.id,
+        companyId: proposal.companyId,
+        negotiationConversationId: proposal.negotiationConversationId,
+        reason: "terms_invalid",
+        status: "rejected",
+        validation,
+        evidence: evidence([
+          proposal.sourceEventId,
+          conversation.sourceEventId,
+          proposal.lastTransitionEventId,
+        ]),
+      });
+      const rejected = ctx.emit("investment.rejected", payload, {
+        actor: { kind: "system", id: "investment-closing" },
+        schemaVersion: 1,
+        correlationId: proposal.id,
+        causationId: proposal.lastTransitionEventId,
+      });
+      const updated = this.db.prepare(`
+        UPDATE investment_proposals
+        SET status = 'rejected', final_terms_canonical = NULL,
+          revision = revision + 1, last_transition_event_id = @transitionEventId
+        WHERE run_id = @runId AND id = @id AND status = 'agreed'
+      `).run({
+        runId: this.runId,
+        id: proposal.id,
+        transitionEventId: rejected.eventId,
+      });
+      if (updated.changes !== 1) {
+        throw new EngineError("CONFLICT", `stale investment proposal ${proposal.id}`);
+      }
+      return this.get(proposal.id);
+    });
   }
 
   private proposeEligible(ctx: TickContext): InvestmentProposal | null {
@@ -541,24 +598,25 @@ export class SqliteInvestmentProposalStore {
 
   private assertCompanyFounder(companyId: string, founderAgentId: string): void {
     const row = this.db.prepare<
-      [string, string, string, string, string, string],
+      [string, string, string],
       { id: string }
     >(`
-      SELECT company.id FROM companies company
-      WHERE company.run_id = ? AND company.id = ?
-        AND company.founder_agent_id = ? AND company.status = 'active'
-      UNION ALL
-      SELECT stake.company_id AS id FROM opening_company_equity_stakes stake
-      WHERE stake.run_id = ? AND stake.company_id = ? AND stake.owner_agent_id = ?
+      SELECT cap.company_id AS id
+      FROM company_cap_tables cap
+      JOIN ownership_stakes stake
+        ON stake.run_id = cap.run_id AND stake.company_id = cap.company_id
+      WHERE cap.run_id = ? AND cap.company_id = ?
+        AND stake.holder_kind = 'agent' AND stake.holder_id = ?
+        AND stake.acquired_via = 'founding'
+        AND (
+          cap.company_kind = 'opening' OR EXISTS (
+            SELECT 1 FROM companies company
+            WHERE company.run_id = cap.run_id AND company.id = cap.company_id
+              AND company.status = 'active'
+          )
+        )
       LIMIT 1
-    `).get(
-      this.runId,
-      companyId,
-      founderAgentId,
-      this.runId,
-      companyId,
-      founderAgentId,
-    );
+    `).get(this.runId, companyId, founderAgentId);
     if (row === undefined) {
       throw new EngineError(
         "NOT_FOUND",

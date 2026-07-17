@@ -800,6 +800,10 @@ function logicalStateHash(
         created_tick, source_event_id
       FROM vc_funds WHERE run_id = ? ORDER BY id
     `),
+    ventureFundAccounts: logicalRows(db, runId, `
+      SELECT fund_id, account_id
+      FROM vc_fund_accounts WHERE run_id = ? ORDER BY fund_id
+    `),
     ventureFundDeployments: logicalRows(db, runId, `
       SELECT id, fund_id, target_company_id, reference_id, amount_cents,
         deployed_before_cents, deployed_after_cents, deployed_tick, source_event_id
@@ -815,10 +819,27 @@ function logicalStateHash(
       FROM investment_proposals
       WHERE run_id = ? ORDER BY proposed_tick, id
     `),
+    companyCapTables: logicalRows(db, runId, `
+      SELECT company_id, company_kind, total_shares, revision, last_event_id
+      FROM company_cap_tables WHERE run_id = ? ORDER BY company_id
+    `),
+    ownershipStakes: logicalRows(db, runId, `
+      SELECT id, company_id, holder_kind, holder_id, shares, acquired_via,
+        since_tick, source_event_id
+      FROM ownership_stakes WHERE run_id = ? ORDER BY company_id, id
+    `),
+    investments: logicalRows(db, runId, `
+      SELECT id, proposal_id, company_id, investor_id, firm_id,
+        amount_cents, pre_money_valuation_cents, shares_issued,
+        total_shares_before, total_shares_after, price_per_share_cents,
+        transaction_id, capital_call_transaction_id, contract_id,
+        ownership_stake_id, completed_tick, source_event_id
+      FROM investments WHERE run_id = ? ORDER BY completed_tick, id
+    `),
   };
 
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 24,
+    stateHashVersion: 25,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
     scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),

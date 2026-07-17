@@ -18,7 +18,6 @@ import {
   jobListQuerySchema,
   jobListResponseSchema,
   Rng,
-  type EventEnvelope,
 } from "@worldtangle/shared";
 import { generateRiverbendPopulation, type TickContext } from "@worldtangle/engine";
 import { SqliteAgentStore } from "./agent-store";
@@ -29,7 +28,12 @@ import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4ReadStore } from "./phase4-read-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { computeLogicalStateHash } from "./snapshot-store";
-import { insertTestRun, TEST_RUN_ID, TEST_SIMULATION_ID } from "./test-helpers";
+import {
+  appendTestTickEvent,
+  insertTestRun,
+  TEST_RUN_ID,
+  TEST_SIMULATION_ID,
+} from "./test-helpers";
 
 const META = { simulated: true, apiVersion: 1 } as const;
 const directories: string[] = [];
@@ -62,7 +66,17 @@ function fixture() {
     rng: (key) => Rng.root(42).fork(`${tick}.${phase}.${key}`),
     count: () => undefined,
     setDigestIndicators: () => undefined,
-    emit: () => ({ eventId: ids.next("evt") }) as EventEnvelope,
+    emit: (type, payload, options) => appendTestTickEvent(db, {
+      simulationId: TEST_SIMULATION_ID,
+      runId: TEST_RUN_ID,
+      ids,
+      tick,
+      simDate: `Y0001-M01-D${String(tick + 1).padStart(2, "0")}`,
+      phase,
+      type,
+      payload,
+      options,
+    }),
   });
   const lawFirmAccount = finance.listAccounts().find((account) => (
     account.ownerKind === "company" && account.type === "checking"

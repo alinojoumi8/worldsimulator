@@ -556,6 +556,17 @@ export class SqliteFinanceStore implements LedgerRepository {
           run_id, company_id, owner_agent_id, shares
         ) VALUES (?, ?, ?, '10000')
       `);
+      const insertCapTable = this.db.prepare(`
+        INSERT INTO company_cap_tables(
+          run_id, company_id, company_kind, total_shares, revision, last_event_id
+        ) VALUES (?, ?, 'opening', '10000', 0, ?)
+      `);
+      const insertOwnershipStake = this.db.prepare(`
+        INSERT INTO ownership_stakes(
+          run_id, id, company_id, holder_kind, holder_id, shares,
+          acquired_via, since_tick, source_event_id
+        ) VALUES (?, ?, ?, 'agent', ?, '10000', 'founding', 0, ?)
+      `);
       const companyIds = population.accounts
         .filter((account) => account.ownerKind === "business")
         .map((account) => account.ownerId)
@@ -568,7 +579,15 @@ export class SqliteFinanceStore implements LedgerRepository {
           throw new EngineError("INTERNAL", `company ${companyId} has no opening founder`);
         }
         insertEquity.run(this.runId, companyId);
+        insertCapTable.run(this.runId, companyId, sourceEventId);
         insertStake.run(this.runId, companyId, founder.agent.id);
+        insertOwnershipStake.run(
+          this.runId,
+          `stk_${(companyId + founder.agent.id).replaceAll("_", "")}`,
+          companyId,
+          founder.agent.id,
+          sourceEventId,
+        );
       }
 
       const indicatorSnapshot = this.computeIndicatorSnapshot(0);
@@ -615,14 +634,27 @@ export class SqliteFinanceStore implements LedgerRepository {
       if (owner === undefined) throw new EngineError("NOT_FOUND", `agent ${input.ownerId} does not exist`);
     }
     if (input.ownerKind === "company") {
-      const registered = this.db.prepare<[string, string, string, string], { organization_id: string }>(`
+      const registered = this.db.prepare<
+        [string, string, string, string, string, string],
+        { organization_id: string }
+      >(`
         SELECT organization_id FROM agents
         WHERE run_id = ? AND organization_id = ?
         UNION ALL
         SELECT id AS organization_id FROM companies
         WHERE run_id = ? AND id = ? AND status IN ('registered', 'active')
+        UNION ALL
+        SELECT id AS organization_id FROM vc_firms
+        WHERE run_id = ? AND id = ? AND status = 'active'
         LIMIT 1
-      `).get(this.runId, input.ownerId, this.runId, input.ownerId);
+      `).get(
+        this.runId,
+        input.ownerId,
+        this.runId,
+        input.ownerId,
+        this.runId,
+        input.ownerId,
+      );
       if (registered === undefined) {
         throw new EngineError("NOT_FOUND", `registered company ${input.ownerId} does not exist`);
       }

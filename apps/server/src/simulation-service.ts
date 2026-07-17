@@ -686,10 +686,12 @@ export class SimulationService implements SimulationApi {
           sourceEventId: energyEventId,
         });
         const ventureFirmEventId = ids.next("evt");
+        const ventureFundAccountEventId = ids.next("evt");
         const ventureFundEventId = ids.next("evt");
         const venture = new SqliteVentureStore(db, persisted.id).initializeFoundry({
           ids,
           firmSourceEventId: ventureFirmEventId,
+          fundAccountSourceEventId: ventureFundAccountEventId,
           fundSourceEventId: ventureFundEventId,
         });
         const financeEventInputs: EventInput[] = [
@@ -784,17 +786,34 @@ export class SimulationService implements SimulationApi {
             }),
           },
           {
+            eventId: venture.fundAccountSourceEventId,
+            type: "account.opened",
+            correlationId: requestId,
+            causationId: ventureFirmEventId,
+            actor: SYSTEM_ACTOR,
+            payload: {
+              accountId: venture.fundAccount.id,
+              bankId: venture.fundAccount.bankId,
+              ownerKind: venture.fundAccount.ownerKind,
+              ownerId: venture.fundAccount.ownerId,
+              type: venture.fundAccount.type,
+              balanceCents: venture.fundAccount.balanceCents,
+              floorCents: venture.fundAccount.floorCents,
+            },
+          },
+          {
             eventId: ventureFundEventId,
             type: "venture.fund.created",
             correlationId: requestId,
-            causationId: ventureFirmEventId,
+            causationId: venture.fundAccountSourceEventId,
             actor: { kind: "institution", id: venture.firm.id },
             payload: ventureFundCreatedPayloadSchema.parse({
               fundId: venture.fund.id,
               firmId: venture.firm.id,
               name: venture.fund.name,
               fundSizeCents: venture.fund.fundSizeCents,
-              evidence: [ventureFirmEventId],
+              bankAccountId: venture.fund.bankAccountId,
+              evidence: [ventureFirmEventId, venture.fundAccountSourceEventId],
             }),
           },
         ];

@@ -1,8 +1,9 @@
-/** WS-802 investment proposal lifecycle, ordered after conversation outcomes. */
+/** WS-802/803 proposal negotiation and atomic investment closing. */
 
 import type { PhaseHandler } from "@worldtangle/engine";
 import {
   SqliteInvestmentProposalStore,
+  SqliteInvestmentStore,
   type WorldDatabase,
 } from "./persistence";
 
@@ -10,12 +11,14 @@ export function createInvestmentProposalPhaseHandler(
   db: WorldDatabase,
   runId: string,
 ): PhaseHandler {
-  const store = new SqliteInvestmentProposalStore(db, runId);
+  const proposals = new SqliteInvestmentProposalStore(db, runId);
+  const investments = new SqliteInvestmentStore(db, runId);
   return {
-    module: "M10-investment-proposals",
+    module: "M10-investments",
     order: 77,
     run: (ctx) => {
-      store.processTick(ctx);
+      proposals.processTick(ctx);
+      investments.processTick(ctx);
     },
   };
 }

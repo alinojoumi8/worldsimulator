@@ -16,7 +16,13 @@ import { SqliteFinanceStore } from "./finance-store";
 import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { computeLogicalStateHash, SqliteSnapshotStore } from "./snapshot-store";
-import { insertTestRun, TEST_RUN_ID, TEST_SIMULATION_ID } from "./test-helpers";
+import {
+  appendTestTickEvent,
+  insertTestRun,
+  testSimDate,
+  TEST_RUN_ID,
+  TEST_SIMULATION_ID,
+} from "./test-helpers";
 import { readRunCheckpoint } from "./tick-committer";
 
 const directories: string[] = [];
@@ -52,21 +58,30 @@ function fixture() {
     sourceEventId: genesisEventId,
   });
   const events: RecordedEvent[] = [];
-  let emittedEventCount = 0;
   const context = (tick: number, phase: TickContext["phase"]): TickContext => ({
     simulationId: TEST_SIMULATION_ID,
     runId: TEST_RUN_ID,
     tick,
-    simDate: `Y0001-M${String(Math.floor((tick - 1) / 30) + 1).padStart(2, "0")}`,
+    simDate: testSimDate(tick),
     phase,
     ids,
     rng: (key) => Rng.root(42).fork(`${tick}.${phase}.${key}`),
     count: () => undefined,
     setDigestIndicators: () => undefined,
     emit: (type, payload, options) => {
-      const eventId = `evt_energy${String(++emittedEventCount).padStart(8, "0")}`;
-      events.push({ eventId, type, payload, options });
-      return { eventId } as EventEnvelope;
+      const event = appendTestTickEvent(db, {
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        ids,
+        tick,
+        simDate: testSimDate(tick),
+        phase,
+        type,
+        payload,
+        options,
+      });
+      events.push({ eventId: event.eventId, type, payload, options });
+      return event;
     },
   });
   return { dataDir, db, ids, finance, energy, events, context, population };

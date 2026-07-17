@@ -21,7 +21,13 @@ import { SqliteInsolvencyStore } from "./insolvency-store";
 import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { computeLogicalStateHash, SqliteSnapshotStore } from "./snapshot-store";
-import { insertTestRun, TEST_RUN_ID, TEST_SIMULATION_ID } from "./test-helpers";
+import {
+  appendTestTickEvent,
+  insertTestRun,
+  testSimDate,
+  TEST_RUN_ID,
+  TEST_SIMULATION_ID,
+} from "./test-helpers";
 import { readRunCheckpoint } from "./tick-committer";
 
 const directories: string[] = [];
@@ -61,21 +67,26 @@ function fixture() {
     simulationId: TEST_SIMULATION_ID,
     runId: TEST_RUN_ID,
     tick,
-    simDate: `Y0001-D${String(tick).padStart(3, "0")}`,
+    simDate: testSimDate(tick),
     phase,
     ids: contextIds,
     rng: (key) => Rng.root(42).fork(`${tick}.${phase}.${key}`),
     count: () => undefined,
     setDigestIndicators: () => undefined,
     emit: (type, payload, options) => {
-      const event = {
-        eventId: contextIds.next("tevt"),
+      const event = appendTestTickEvent(db, {
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        ids: contextIds,
+        tick,
+        simDate: testSimDate(tick),
+        phase,
         type,
         payload,
         options,
-      };
-      events.push(event);
-      return event as unknown as EventEnvelope;
+      });
+      events.push({ eventId: event.eventId, type, payload, options });
+      return event;
     },
   });
   const context = (tick: number, phase: TickContext["phase"]) =>

@@ -14,6 +14,7 @@ import { checkInvariants, generateRiverbendPopulation, type TickContext } from "
 import { readRunInvariantSnapshot } from "../testing/run-invariant-probe";
 import { SqliteAgentStore } from "./agent-store";
 import { openWorldDatabase, type WorldDatabase } from "./database";
+import { SqliteEventStore } from "./event-store";
 import { SqliteFinanceStore } from "./finance-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { insertTestRun, TEST_RUN_ID, TEST_SIMULATION_ID } from "./test-helpers";
@@ -56,7 +57,26 @@ function fixture() {
     setDigestIndicators: () => undefined,
     emit: (type, payload, options) => {
       eventTypes.push(type);
-      const event = { eventId: ids.next("evt") } as EventEnvelope;
+      const simDate = `Y0001-M01-D${String(tick + 1).padStart(2, "0")}`;
+      const events = new SqliteEventStore(db, TEST_RUN_ID);
+      const event: EventEnvelope = {
+        eventId: ids.next("evt"),
+        type,
+        schemaVersion: options?.schemaVersion ?? 1,
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        seq: events.count(),
+        tick,
+        simDate,
+        wallTime: `T${tick}`,
+        actor: options?.actor ?? { kind: "system", id: "phase4-test" },
+        correlationId: options?.correlationId ?? `phase4-test:${tick}`,
+        ...(options?.causationId === undefined
+          ? {}
+          : { causationId: options.causationId }),
+        payload,
+      };
+      events.append(event);
       emitted.push({ type, payload, options, eventId: event.eventId });
       return event;
     },

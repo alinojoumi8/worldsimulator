@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  capTableSnapshotSchema,
   investmentEquityBasisPoints,
   investmentProposalSchema,
   investmentStructuredTermsSchema,
+  ownershipStakeSchema,
   ventureFundDeploymentSchema,
   ventureFundSchema,
 } from "./venture";
@@ -13,6 +15,7 @@ describe("venture contracts", () => {
       id: "vfund_00000001",
       runId: "run_00000001",
       firmId: "inst_foundry_capital",
+      bankAccountId: "acct_00000001",
       name: "Foundry Fund I",
       fundSizeCents: "100",
       deployedCents: "25",
@@ -41,6 +44,7 @@ describe("venture contracts", () => {
       id: "vfund_00000001",
       runId: "run_00000001",
       firmId: "inst_foundry_capital",
+      bankAccountId: "acct_00000001",
       name: "Foundry Fund I",
       fundSizeCents: "100",
       deployedCents: "101",
@@ -114,5 +118,63 @@ describe("venture contracts", () => {
       sourceEventId: "evt_00000001",
       lastTransitionEventId: "evt_00000002",
     })).toThrow(/negotiation conversation/);
+  });
+
+  it("requires exact cap-table totals while allowing later agent and fund trades", () => {
+    const founder = ownershipStakeSchema.parse({
+      id: "stk_00000001",
+      runId: "run_00000001",
+      companyId: "co_00000001",
+      holderKind: "agent",
+      holderId: "agt_00000001",
+      shares: "80",
+      acquiredVia: "founding",
+      sinceTick: 0,
+      sourceEventId: null,
+    });
+    const investor = ownershipStakeSchema.parse({
+      id: "stk_00000002",
+      runId: "run_00000001",
+      companyId: "co_00000001",
+      holderKind: "venture_fund",
+      holderId: "vfund_00000001",
+      shares: "20",
+      acquiredVia: "investment",
+      sinceTick: 10,
+      sourceEventId: "evt_00000001",
+    });
+    expect(ownershipStakeSchema.parse({
+      ...founder,
+      id: "stk_00000003",
+      acquiredVia: "trade",
+    }).acquiredVia).toBe("trade");
+    expect(ownershipStakeSchema.parse({
+      ...investor,
+      id: "stk_00000004",
+      acquiredVia: "trade",
+    }).acquiredVia).toBe("trade");
+    const stakes = [founder, investor].map((stake) => ({
+      id: stake.id,
+      companyId: stake.companyId,
+      holderKind: stake.holderKind,
+      holderId: stake.holderId,
+      shares: stake.shares,
+      acquiredVia: stake.acquiredVia,
+      sinceTick: stake.sinceTick,
+    }));
+    expect(capTableSnapshotSchema.parse({
+      companyId: "co_00000001",
+      totalShares: "100",
+      stakes,
+    }).totalShares).toBe("100");
+    expect(() => capTableSnapshotSchema.parse({
+      companyId: "co_00000001",
+      totalShares: "101",
+      stakes,
+    })).toThrow(/sum exactly/);
+    expect(() => ownershipStakeSchema.parse({
+      ...founder,
+      acquiredVia: "investment",
+    })).toThrow(/venture funds/);
   });
 });

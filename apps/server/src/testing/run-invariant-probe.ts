@@ -71,11 +71,10 @@ interface CompanyClosureRow {
 interface EquityRow {
   company_id: string;
   total_shares: string;
-  source: "opening" | "phase4";
 }
 
 interface StakeRow {
-  owner_agent_id: string;
+  holder_id: string;
   shares: string;
 }
 
@@ -249,24 +248,17 @@ export function readRunInvariantSnapshot(
       balanceCents: row.balance_cents,
       floorCents: row.floor_cents,
     })),
-    ownership: db.prepare<[string, string], EquityRow>(`
-      SELECT company_id, total_shares, 'opening' AS source
-      FROM opening_company_equity WHERE run_id = ?
-      UNION ALL
-      SELECT id AS company_id, total_shares, 'phase4' AS source
-      FROM companies WHERE run_id = ?
-      ORDER BY company_id
-    `).all(runId, runId).map((company) => ({
+    ownership: db.prepare<[string], EquityRow>(`
+      SELECT company_id, total_shares
+      FROM company_cap_tables WHERE run_id = ? ORDER BY company_id
+    `).all(runId).map((company) => ({
       companyId: company.company_id,
       totalShares: company.total_shares,
-      stakes: db.prepare<[string, string, string], StakeRow>(company.source === "opening" ? `
-        SELECT owner_agent_id, shares FROM opening_company_equity_stakes
-        WHERE run_id = ? AND company_id = ? AND ? = 'opening' ORDER BY owner_agent_id
-      ` : `
-        SELECT owner_agent_id, shares FROM company_equity_stakes
-        WHERE run_id = ? AND company_id = ? AND ? = 'phase4' ORDER BY owner_agent_id
-      `).all(runId, company.company_id, company.source).map((stake) => ({
-        ownerId: stake.owner_agent_id,
+      stakes: db.prepare<[string, string], StakeRow>(`
+        SELECT holder_id, shares FROM ownership_stakes
+        WHERE run_id = ? AND company_id = ? ORDER BY holder_kind, holder_id, id
+      `).all(runId, company.company_id).map((stake) => ({
+        ownerId: stake.holder_id,
         shares: stake.shares,
       })),
     })),

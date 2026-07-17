@@ -124,6 +124,22 @@ describe("legal contract templates", () => {
         endTick: 365,
       },
     },
+    {
+      type: "investment",
+      terms: {
+        template: "investment",
+        proposalId: "prop_00000001",
+        companyId: "co_00000001",
+        investorFundId: "vfund_00000001",
+        investorFirmId: "inst_foundry_capital",
+        amountCents: "100000",
+        preMoneyValuationCents: "400000",
+        pricePerShareCents: "400",
+        sharesIssued: "250",
+        totalSharesBefore: "1000",
+        totalSharesAfter: "1250",
+      },
+    },
   ];
 
   it.each(templates)("validates the $type template", ({ type, terms }) => {

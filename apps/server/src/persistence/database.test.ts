@@ -9,6 +9,7 @@ import {
   type EventEnvelope,
 } from "@worldtangle/shared";
 import {
+  createContractFromTemplate,
   deterministicConversationOutcome,
   generateRiverbendPopulation,
   simDateForTick,
@@ -17,6 +18,9 @@ import {
 import { SqliteAgentStore } from "./agent-store";
 import { SqliteConversationStore } from "./conversation-store";
 import { SqliteEventStore } from "./event-store";
+import { SqliteFinanceStore } from "./finance-store";
+import { SqlitePhase4Store } from "./phase4-store";
+import { SqliteVentureStore } from "./venture-store";
 import {
   openDatabaseFile,
   openWorldDatabase,
@@ -64,7 +68,7 @@ describe("world database", () => {
     expect(
       db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations").get()
         ?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     db.close();
 
     const reopened = openWorldDatabase(dataDir, "sim_00000001", "run_00000001");
@@ -72,7 +76,7 @@ describe("world database", () => {
       reopened
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     reopened.close();
   });
 
@@ -91,7 +95,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     const triggerNames = upgraded
       .prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema
@@ -118,7 +122,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     expect(
       upgraded.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'api_tasks'
@@ -142,7 +146,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_response_cache'
@@ -171,7 +175,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     const names = upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name LIKE 'llm_%'
@@ -207,7 +211,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_call_records'
@@ -271,7 +275,7 @@ describe("world database", () => {
     `).all().map((row) => row.name);
     upgraded.close();
 
-    expect(migrationCount).toBe(32n);
+    expect(migrationCount).toBe(33n);
     expect(tableNames).toEqual([
       "conversation_bindings",
       "conversation_inbox",
@@ -302,7 +306,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'conversation_bindings'
@@ -340,7 +344,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -369,7 +373,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -407,7 +411,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -452,7 +456,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -528,7 +532,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -569,7 +573,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -598,7 +602,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -620,6 +624,7 @@ describe("world database", () => {
       ORDER BY name
     `).all().map((row) => row.name)).toEqual([
       "vc_firms",
+      "vc_fund_accounts",
       "vc_fund_deployments",
       "vc_funds",
     ]);
@@ -632,7 +637,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
   });
 
@@ -733,6 +738,12 @@ describe("world database", () => {
     `).get(TEST_RUN_ID, conversation.id)!.count;
     expect(relationshipHistoryCount).toBeGreaterThan(0n);
     db.exec(`
+      DROP TRIGGER events_validate_investment_completion;
+      DROP TABLE investments;
+      DROP TABLE ownership_stakes;
+      DROP TABLE company_cap_tables;
+      DROP TABLE vc_fund_accounts;
+      DELETE FROM schema_migrations WHERE version = 33;
       DROP TABLE investment_proposals;
       DELETE FROM schema_migrations WHERE version = 32;
     `);
@@ -758,8 +769,204 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(32n);
+    ).toBe(33n);
     upgraded.close();
+  });
+
+  it("upgrades populated version-32 state into fund accounts and exact cap tables", () => {
+    const path = join(temporaryDirectory(), "investment-closing-upgrade.db");
+    const db = openDatabaseFile(path);
+    insertTestRun(db);
+    const population = generateRiverbendPopulation({ runId: TEST_RUN_ID, seed: 42 });
+    const agentTriggers = new Map(population.residents.map((resident) => [
+      resident.agent.id,
+      `evt_${(resident.rosterIndex + 1).toString(36).padStart(8, "0")}`,
+    ]));
+    new SqliteAgentStore(db, TEST_RUN_ID).insertPopulation(population, agentTriggers);
+    const ids = IdFactory.restore(population.idState);
+    new SqliteFinanceStore(db, TEST_RUN_ID).initialize(population, ids);
+    const firmEventId = ids.next("evt");
+    const fundAccountEventId = ids.next("evt");
+    const fundEventId = ids.next("evt");
+    const venture = new SqliteVentureStore(db, TEST_RUN_ID).initializeFoundry({
+      ids,
+      firmSourceEventId: firmEventId,
+      fundAccountSourceEventId: fundAccountEventId,
+      fundSourceEventId: fundEventId,
+    });
+    new SqliteEventStore(db, TEST_RUN_ID).appendBatch([
+      {
+        eventId: firmEventId,
+        type: "venture.firm.created",
+        schemaVersion: 1,
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        seq: 0,
+        tick: 0,
+        simDate: simDateForTick(0),
+        wallTime: "T0",
+        actor: { kind: "system", id: "migration-test" },
+        correlationId: "migration-venture",
+        payload: { firmId: venture.firm.id },
+      },
+      {
+        eventId: fundAccountEventId,
+        type: "account.opened",
+        schemaVersion: 1,
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        seq: 1,
+        tick: 0,
+        simDate: simDateForTick(0),
+        wallTime: "T0",
+        actor: { kind: "system", id: "migration-test" },
+        correlationId: "migration-venture",
+        causationId: firmEventId,
+        payload: { accountId: venture.fundAccount.id },
+      },
+      {
+        eventId: fundEventId,
+        type: "venture.fund.created",
+        schemaVersion: 1,
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        seq: 2,
+        tick: 0,
+        simDate: simDateForTick(0),
+        wallTime: "T0",
+        actor: { kind: "institution", id: venture.firm.id },
+        correlationId: "migration-venture",
+        causationId: fundAccountEventId,
+        payload: { fundId: venture.fund.id },
+      },
+    ]);
+    const contract = createContractFromTemplate({
+      id: ids.next("ctr"),
+      runId: TEST_RUN_ID,
+      type: "service",
+      parties: [
+        { kind: "agent", id: population.residents[0]!.agent.id, role: "provider" },
+        { kind: "agent", id: population.residents[1]!.agent.id, role: "client" },
+      ],
+      terms: {
+        template: "service",
+        providerId: population.residents[0]!.agent.id,
+        clientId: population.residents[1]!.agent.id,
+        scope: "Preserve legal child rows during the v33 table rebuild.",
+        feeCents: "100",
+        dueTick: 5,
+      },
+      draftedBy: { kind: "system", id: "migration-test" },
+      createdTick: 0,
+      effectiveTick: 0,
+      ids,
+    });
+    new SqlitePhase4Store(db, TEST_RUN_ID).insertLegalContract(contract, ids);
+    const legalChildrenBefore = {
+      parties: db.prepare<[string, string], { count: bigint }>(`
+        SELECT COUNT(*) AS count FROM legal_contract_parties
+        WHERE run_id = ? AND contract_id = ?
+      `).get(TEST_RUN_ID, contract.id)!.count,
+      obligations: db.prepare<[string, string], { count: bigint }>(`
+        SELECT COUNT(*) AS count FROM legal_obligations
+        WHERE run_id = ? AND contract_id = ?
+      `).get(TEST_RUN_ID, contract.id)!.count,
+      timeline: db.prepare<[string, string], { count: bigint }>(`
+        SELECT COUNT(*) AS count FROM legal_contract_timeline
+        WHERE run_id = ? AND contract_id = ?
+      `).get(TEST_RUN_ID, contract.id)!.count,
+    };
+    const openingCompanies = db.prepare<[string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM opening_company_equity WHERE run_id = ?
+    `).get(TEST_RUN_ID)!.count;
+    db.exec(`
+      DROP TRIGGER investment_proposals_validate_company;
+      DROP TRIGGER events_validate_investment_completion;
+      DROP TABLE investments;
+      DROP TABLE ownership_stakes;
+      DROP TABLE company_cap_tables;
+      DROP TABLE vc_fund_accounts;
+      CREATE TRIGGER investment_proposals_validate_company
+      BEFORE INSERT ON investment_proposals
+      WHEN NOT EXISTS (
+        SELECT 1 FROM opening_company_equity_stakes opening
+        WHERE opening.run_id = NEW.run_id AND opening.company_id = NEW.company_id
+          AND opening.owner_agent_id = NEW.founder_agent_id
+      ) AND NOT EXISTS (
+        SELECT 1 FROM companies company
+        WHERE company.run_id = NEW.run_id AND company.id = NEW.company_id
+          AND company.founder_agent_id = NEW.founder_agent_id
+          AND company.status = 'active'
+      )
+      BEGIN SELECT RAISE(ABORT, 'investment proposal company or founder is invalid'); END;
+      DELETE FROM schema_migrations WHERE version = 33;
+    `);
+    db.close();
+
+    const upgraded = openDatabaseFile(path);
+    const upgradedFundAccountId = upgraded.prepare<
+      [string, string],
+      { account_id: string }
+    >(`
+      SELECT account_id FROM vc_fund_accounts WHERE run_id = ? AND fund_id = ?
+    `).get(TEST_RUN_ID, venture.fund.id)?.account_id;
+    expect(upgradedFundAccountId).toMatch(/^acct_v33fund[0-9a-z]+$/);
+    expect(upgradedFundAccountId).not.toBe(venture.fund.bankAccountId);
+    expect(upgraded.prepare<[string, string], {
+      owner_id: string;
+      balance_cents: string;
+    }>(`
+      SELECT owner_id, balance_cents FROM bank_accounts
+      WHERE run_id = ? AND id = ?
+    `).get(TEST_RUN_ID, upgradedFundAccountId!)).toEqual({
+      owner_id: venture.firm.id,
+      balance_cents: "0",
+    });
+    expect(upgraded.prepare<[string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM company_cap_tables WHERE run_id = ?
+    `).get(TEST_RUN_ID)?.count).toBe(openingCompanies);
+    expect(upgraded.prepare<[string], { count: bigint }>(`
+      SELECT COUNT(*) AS count
+      FROM company_cap_tables cap
+      WHERE cap.run_id = ? AND CAST(cap.total_shares AS INTEGER) <> (
+        SELECT COALESCE(SUM(CAST(stake.shares AS INTEGER)), 0)
+        FROM ownership_stakes stake
+        WHERE stake.run_id = cap.run_id AND stake.company_id = cap.company_id
+      )
+    `).get(TEST_RUN_ID)?.count).toBe(0n);
+    expect(new SqlitePhase4Store(upgraded, TEST_RUN_ID).getLegalContract(contract.id))
+      .toMatchObject({ id: contract.id, type: "service", terms: contract.terms });
+    expect(upgraded.prepare<[string, string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM legal_contract_parties
+      WHERE run_id = ? AND contract_id = ?
+    `).get(TEST_RUN_ID, contract.id)?.count).toBe(legalChildrenBefore.parties);
+    expect(upgraded.prepare<[string, string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM legal_obligations
+      WHERE run_id = ? AND contract_id = ?
+    `).get(TEST_RUN_ID, contract.id)?.count).toBe(legalChildrenBefore.obligations);
+    expect(upgraded.prepare<[string, string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM legal_contract_timeline
+      WHERE run_id = ? AND contract_id = ?
+    `).get(TEST_RUN_ID, contract.id)?.count).toBe(legalChildrenBefore.timeline);
+    expect(upgraded.prepare<[], { sql: string }>(`
+      SELECT sql FROM sqlite_schema
+      WHERE type = 'trigger' AND name = 'investment_proposals_validate_company'
+    `).get()?.sql).toContain("ownership_stakes");
+    expect(upgraded.prepare<[], { sql: string }>(`
+      SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'legal_contracts'
+    `).get()?.sql).toContain("'investment'");
+    expect(upgraded.pragma("foreign_key_check")).toEqual([]);
+    expect(upgraded.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM schema_migrations
+    `).get()?.count).toBe(33n);
+    upgraded.close();
+
+    const reopened = openDatabaseFile(path);
+    expect(reopened.prepare<[string], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM company_cap_tables WHERE run_id = ?
+    `).get(TEST_RUN_ID)?.count).toBe(openingCompanies);
+    expect(reopened.pragma("foreign_key_check")).toEqual([]);
+    reopened.close();
   });
 
   it("refuses to open a database whose applied migration checksum drifted", () => {

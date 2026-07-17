@@ -4128,6 +4128,424 @@ CREATE TRIGGER investment_proposals_no_delete BEFORE DELETE ON investment_propos
 BEGIN SELECT RAISE(ABORT, 'investment proposals cannot be deleted'); END;
 `;
 
+const PHASE_8_INVESTMENT_CLOSING = `
+CREATE TABLE legal_contracts_v33 (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL,
+  contract_type TEXT NOT NULL CHECK (contract_type IN (
+    'incorporation', 'employment', 'service', 'lease', 'investment'
+  )),
+  status TEXT NOT NULL CHECK (status IN (
+    'draft', 'signed', 'active', 'completed', 'terminated', 'breached'
+  )),
+  terms_canonical TEXT NOT NULL,
+  drafted_by_kind TEXT NOT NULL
+    CHECK (drafted_by_kind IN ('agent', 'institution', 'system', 'admin')),
+  drafted_by_id TEXT NOT NULL,
+  fee_cents TEXT NOT NULL,
+  created_tick INTEGER NOT NULL CHECK (created_tick >= 0),
+  effective_tick INTEGER NOT NULL CHECK (effective_tick >= created_tick),
+  terminal_tick INTEGER,
+  PRIMARY KEY (run_id, id),
+  CHECK (terminal_tick IS NULL OR terminal_tick >= created_tick)
+);
+INSERT INTO legal_contracts_v33(
+  run_id, id, contract_type, status, terms_canonical, drafted_by_kind,
+  drafted_by_id, fee_cents, created_tick, effective_tick, terminal_tick
+)
+SELECT run_id, id, contract_type, status, terms_canonical, drafted_by_kind,
+  drafted_by_id, fee_cents, created_tick, effective_tick, terminal_tick
+FROM legal_contracts;
+DROP TABLE legal_contracts;
+ALTER TABLE legal_contracts_v33 RENAME TO legal_contracts;
+CREATE INDEX legal_contracts_status
+  ON legal_contracts(run_id, status, effective_tick, id);
+
+CREATE TABLE vc_fund_accounts (
+  run_id TEXT NOT NULL,
+  fund_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, fund_id),
+  UNIQUE (run_id, account_id),
+  FOREIGN KEY (run_id, fund_id) REFERENCES vc_funds(run_id, id),
+  FOREIGN KEY (run_id, account_id) REFERENCES bank_accounts(run_id, id)
+);
+CREATE INDEX vc_fund_accounts_account ON vc_fund_accounts(run_id, account_id, fund_id);
+INSERT INTO bank_accounts(
+  run_id, id, bank_id, owner_kind, owner_id, account_type,
+  balance_cents, floor_cents, status, opened_tick
+)
+SELECT fund.run_id, 'acct_v33fund' || substr(fund.id, 7), operating.bank_id,
+  'company', fund.firm_id, 'checking', '0', '0', 'active', fund.created_tick
+FROM vc_funds fund
+JOIN bank_accounts operating
+  ON operating.run_id = fund.run_id AND operating.id = (
+    SELECT account.id FROM bank_accounts account
+    WHERE account.run_id = fund.run_id AND account.owner_kind = 'company'
+      AND account.owner_id = fund.firm_id AND account.account_type = 'checking'
+      AND account.status = 'active'
+    ORDER BY account.id LIMIT 1
+  );
+INSERT INTO vc_fund_accounts(run_id, fund_id, account_id)
+SELECT fund.run_id, fund.id, 'acct_v33fund' || substr(fund.id, 7)
+FROM vc_funds fund;
+CREATE TRIGGER vc_fund_accounts_validate
+BEFORE INSERT ON vc_fund_accounts
+WHEN NOT EXISTS (
+  SELECT 1 FROM vc_funds fund
+  JOIN bank_accounts account
+    ON account.run_id = fund.run_id AND account.id = NEW.account_id
+  WHERE fund.run_id = NEW.run_id AND fund.id = NEW.fund_id
+    AND account.owner_kind = 'company' AND account.owner_id = fund.firm_id
+    AND account.account_type = 'checking' AND account.status = 'active'
+)
+BEGIN SELECT RAISE(ABORT, 'venture fund account is not an active firm checking account'); END;
+CREATE TRIGGER vc_fund_accounts_no_update BEFORE UPDATE ON vc_fund_accounts
+BEGIN SELECT RAISE(ABORT, 'venture fund account links are immutable'); END;
+CREATE TRIGGER vc_fund_accounts_no_delete BEFORE DELETE ON vc_fund_accounts
+BEGIN SELECT RAISE(ABORT, 'venture fund account links are immutable'); END;
+
+CREATE TABLE company_cap_tables (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  company_id TEXT NOT NULL CHECK (
+    (substr(company_id, 1, 3) = 'co_' AND length(company_id) >= 11) OR
+    (substr(company_id, 1, 4) = 'biz_' AND length(company_id) >= 7)
+  ),
+  company_kind TEXT NOT NULL CHECK (company_kind IN ('opening', 'dynamic')),
+  total_shares TEXT NOT NULL CHECK (
+    total_shares GLOB '[1-9]*' AND total_shares NOT GLOB '*[^0-9]*' AND
+    (length(total_shares) < 19 OR
+      (length(total_shares) = 19 AND total_shares <= '9223372036854775807'))
+  ),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  last_event_id TEXT,
+  PRIMARY KEY (run_id, company_id),
+  FOREIGN KEY (run_id, last_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED
+);
+INSERT INTO company_cap_tables(
+  run_id, company_id, company_kind, total_shares, revision, last_event_id
+)
+SELECT opening.run_id, opening.company_id, 'opening', opening.total_shares, 0, (
+  SELECT event.event_id FROM events event
+  WHERE event.run_id = opening.run_id AND event.type IN (
+    'population.generated', 'simulation.created'
+  )
+  ORDER BY event.seq LIMIT 1
+)
+FROM opening_company_equity opening;
+INSERT INTO company_cap_tables(
+  run_id, company_id, company_kind, total_shares, revision, last_event_id
+)
+SELECT company.run_id, company.id, 'dynamic', company.total_shares, 0, (
+  SELECT event.event_id FROM events event
+  WHERE event.run_id = company.run_id AND event.type = 'company.equity.issued'
+    AND json_extract(event.payload_canonical, '$.companyId') = company.id
+  ORDER BY event.seq DESC LIMIT 1
+)
+FROM companies company
+WHERE EXISTS (
+  SELECT 1 FROM company_equity_stakes stake
+  WHERE stake.run_id = company.run_id AND stake.company_id = company.id
+);
+CREATE TRIGGER company_cap_tables_validate_company
+BEFORE INSERT ON company_cap_tables
+WHEN (
+  NEW.company_kind = 'opening' AND NOT EXISTS (
+    SELECT 1 FROM opening_company_equity opening
+    WHERE opening.run_id = NEW.run_id AND opening.company_id = NEW.company_id
+  )
+) OR (
+  NEW.company_kind = 'dynamic' AND NOT EXISTS (
+    SELECT 1 FROM companies company
+    WHERE company.run_id = NEW.run_id AND company.id = NEW.company_id
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'cap table company does not exist'); END;
+CREATE TRIGGER company_cap_tables_identity_immutable
+BEFORE UPDATE OF run_id, company_id, company_kind ON company_cap_tables
+BEGIN SELECT RAISE(ABORT, 'cap table identity is immutable'); END;
+CREATE TRIGGER company_cap_tables_no_delete BEFORE DELETE ON company_cap_tables
+BEGIN SELECT RAISE(ABORT, 'cap tables cannot be deleted'); END;
+
+CREATE TABLE ownership_stakes (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (id GLOB 'stk_[0-9a-z]*' AND length(id) >= 12),
+  company_id TEXT NOT NULL,
+  holder_kind TEXT NOT NULL CHECK (holder_kind IN ('agent', 'venture_fund')),
+  holder_id TEXT NOT NULL,
+  shares TEXT NOT NULL CHECK (
+    shares GLOB '[1-9]*' AND shares NOT GLOB '*[^0-9]*' AND
+    (length(shares) < 19 OR (length(shares) = 19 AND shares <= '9223372036854775807'))
+  ),
+  acquired_via TEXT NOT NULL CHECK (acquired_via IN ('founding', 'investment', 'trade')),
+  since_tick INTEGER NOT NULL CHECK (since_tick >= 0),
+  source_event_id TEXT,
+  PRIMARY KEY (run_id, id),
+  FOREIGN KEY (run_id, company_id) REFERENCES company_cap_tables(run_id, company_id),
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  CHECK (acquired_via <> 'founding' OR holder_kind = 'agent'),
+  CHECK (acquired_via <> 'investment' OR holder_kind = 'venture_fund')
+);
+CREATE INDEX ownership_stakes_company
+  ON ownership_stakes(run_id, company_id, holder_kind, holder_id, id);
+CREATE INDEX ownership_stakes_source_event
+  ON ownership_stakes(run_id, source_event_id)
+  WHERE acquired_via = 'investment';
+INSERT INTO ownership_stakes(
+  run_id, id, company_id, holder_kind, holder_id, shares,
+  acquired_via, since_tick, source_event_id
+)
+SELECT stake.run_id,
+  'stk_' || lower(replace(stake.company_id || stake.owner_agent_id, '_', '')),
+  stake.company_id, 'agent', stake.owner_agent_id, stake.shares,
+  'founding', 0, cap.last_event_id
+FROM opening_company_equity_stakes stake
+JOIN company_cap_tables cap
+  ON cap.run_id = stake.run_id AND cap.company_id = stake.company_id;
+INSERT INTO ownership_stakes(
+  run_id, id, company_id, holder_kind, holder_id, shares,
+  acquired_via, since_tick, source_event_id
+)
+SELECT stake.run_id,
+  'stk_' || lower(replace(stake.company_id || stake.owner_agent_id, '_', '')),
+  stake.company_id, 'agent', stake.owner_agent_id, stake.shares,
+  'founding', stake.issued_tick, cap.last_event_id
+FROM company_equity_stakes stake
+JOIN company_cap_tables cap
+  ON cap.run_id = stake.run_id AND cap.company_id = stake.company_id;
+CREATE TRIGGER ownership_stakes_validate_holder
+BEFORE INSERT ON ownership_stakes
+WHEN (
+  NEW.holder_kind = 'agent' AND NOT EXISTS (
+    SELECT 1 FROM agents agent
+    WHERE agent.run_id = NEW.run_id AND agent.id = NEW.holder_id
+  )
+) OR (
+  NEW.holder_kind = 'venture_fund' AND NOT EXISTS (
+    SELECT 1 FROM vc_funds fund
+    WHERE fund.run_id = NEW.run_id AND fund.id = NEW.holder_id
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'ownership-stake holder does not exist'); END;
+CREATE TRIGGER ownership_stakes_validate_investment_event
+BEFORE INSERT ON ownership_stakes
+WHEN NEW.acquired_via = 'investment' AND EXISTS (
+  SELECT 1 FROM events event
+  WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
+    AND event.type <> 'investment.completed'
+)
+BEGIN SELECT RAISE(ABORT, 'investment stake source must be its completion event'); END;
+CREATE TRIGGER events_validate_investment_completion
+BEFORE INSERT ON events
+WHEN NEW.type <> 'investment.completed' AND EXISTS (
+  SELECT 1 FROM ownership_stakes stake
+  WHERE stake.run_id = NEW.run_id AND stake.source_event_id = NEW.event_id
+    AND stake.acquired_via = 'investment'
+)
+BEGIN SELECT RAISE(ABORT, 'investment stake source must be its completion event'); END;
+CREATE TRIGGER ownership_stakes_no_update BEFORE UPDATE ON ownership_stakes
+BEGIN SELECT RAISE(ABORT, 'ownership stakes are immutable before market transfers'); END;
+CREATE TRIGGER ownership_stakes_no_delete BEFORE DELETE ON ownership_stakes
+BEGIN SELECT RAISE(ABORT, 'ownership stakes cannot be deleted'); END;
+DROP TRIGGER investment_proposals_validate_company;
+CREATE TRIGGER investment_proposals_validate_company
+BEFORE INSERT ON investment_proposals
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM company_cap_tables cap
+  JOIN ownership_stakes stake
+    ON stake.run_id = cap.run_id AND stake.company_id = cap.company_id
+  WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
+    AND stake.holder_kind = 'agent' AND stake.holder_id = NEW.founder_agent_id
+    AND stake.acquired_via = 'founding'
+    AND (
+      cap.company_kind = 'opening' OR EXISTS (
+        SELECT 1 FROM companies company
+        WHERE company.run_id = cap.run_id AND company.id = cap.company_id
+          AND company.status = 'active'
+      )
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'investment proposal company or founder is invalid'); END;
+CREATE TRIGGER company_cap_tables_valid_issuance
+BEFORE UPDATE OF total_shares, revision, last_event_id ON company_cap_tables
+WHEN CAST(NEW.total_shares AS INTEGER) <= CAST(OLD.total_shares AS INTEGER) OR
+  NEW.revision <> OLD.revision + 1 OR NEW.last_event_id IS NULL OR
+  NEW.last_event_id IS OLD.last_event_id OR NOT EXISTS (
+    SELECT 1 FROM ownership_stakes stake
+    WHERE stake.run_id = OLD.run_id AND stake.company_id = OLD.company_id
+      AND stake.acquired_via = 'investment'
+      AND stake.source_event_id = NEW.last_event_id
+      AND CAST(stake.shares AS INTEGER) =
+        CAST(NEW.total_shares AS INTEGER) - CAST(OLD.total_shares AS INTEGER)
+  )
+BEGIN SELECT RAISE(ABORT, 'cap table update requires an exact evented share issuance'); END;
+
+CREATE TABLE investments (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (id GLOB 'inv_[0-9a-z]*' AND length(id) >= 12),
+  proposal_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  investor_id TEXT NOT NULL,
+  firm_id TEXT NOT NULL,
+  amount_cents TEXT NOT NULL,
+  pre_money_valuation_cents TEXT NOT NULL,
+  shares_issued TEXT NOT NULL,
+  total_shares_before TEXT NOT NULL,
+  total_shares_after TEXT NOT NULL,
+  price_per_share_cents TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+  capital_call_transaction_id TEXT,
+  contract_id TEXT NOT NULL,
+  ownership_stake_id TEXT NOT NULL,
+  completed_tick INTEGER NOT NULL CHECK (completed_tick >= 0),
+  source_event_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, proposal_id),
+  UNIQUE (run_id, transaction_id),
+  UNIQUE (run_id, ownership_stake_id),
+  FOREIGN KEY (run_id, proposal_id) REFERENCES investment_proposals(run_id, id),
+  FOREIGN KEY (run_id, investor_id) REFERENCES vc_funds(run_id, id),
+  FOREIGN KEY (run_id, firm_id) REFERENCES vc_firms(run_id, id),
+  FOREIGN KEY (run_id, transaction_id) REFERENCES ledger_transactions(run_id, id),
+  FOREIGN KEY (run_id, capital_call_transaction_id)
+    REFERENCES ledger_transactions(run_id, id),
+  FOREIGN KEY (run_id, contract_id) REFERENCES legal_contracts(run_id, id),
+  FOREIGN KEY (run_id, ownership_stake_id) REFERENCES ownership_stakes(run_id, id),
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED,
+  CHECK (
+    amount_cents GLOB '[1-9]*' AND amount_cents NOT GLOB '*[^0-9]*' AND
+    pre_money_valuation_cents GLOB '[1-9]*' AND
+      pre_money_valuation_cents NOT GLOB '*[^0-9]*' AND
+    shares_issued GLOB '[1-9]*' AND shares_issued NOT GLOB '*[^0-9]*' AND
+    total_shares_before GLOB '[1-9]*' AND
+      total_shares_before NOT GLOB '*[^0-9]*' AND
+    total_shares_after GLOB '[1-9]*' AND
+      total_shares_after NOT GLOB '*[^0-9]*' AND
+    price_per_share_cents GLOB '[1-9]*' AND
+      price_per_share_cents NOT GLOB '*[^0-9]*'
+  ),
+  CHECK (
+    CAST(total_shares_before AS INTEGER) + CAST(shares_issued AS INTEGER) =
+      CAST(total_shares_after AS INTEGER)
+  ),
+  CHECK (
+    CAST(price_per_share_cents AS INTEGER) * CAST(total_shares_before AS INTEGER) =
+      CAST(pre_money_valuation_cents AS INTEGER)
+  ),
+  CHECK (
+    CAST(price_per_share_cents AS INTEGER) * CAST(shares_issued AS INTEGER) =
+      CAST(amount_cents AS INTEGER)
+  )
+);
+CREATE INDEX investments_company ON investments(run_id, company_id, completed_tick, id);
+CREATE INDEX investments_investor ON investments(run_id, investor_id, completed_tick, id);
+CREATE TRIGGER investments_validate_close
+BEFORE INSERT ON investments
+WHEN NOT EXISTS (
+  SELECT 1 FROM investment_proposals proposal
+  JOIN vc_funds fund
+    ON fund.run_id = proposal.run_id AND fund.id = proposal.fund_id
+  WHERE proposal.run_id = NEW.run_id AND proposal.id = NEW.proposal_id
+    AND proposal.status = 'completed' AND proposal.company_id = NEW.company_id
+    AND proposal.fund_id = NEW.investor_id AND proposal.firm_id = NEW.firm_id
+    AND json_extract(proposal.final_terms_canonical, '$.amountCents') = NEW.amount_cents
+    AND json_extract(proposal.final_terms_canonical, '$.preMoneyValuationCents') =
+      NEW.pre_money_valuation_cents
+) OR NOT EXISTS (
+  SELECT 1 FROM legal_contracts contract
+  WHERE contract.run_id = NEW.run_id AND contract.id = NEW.contract_id
+    AND contract.contract_type = 'investment'
+    AND contract.status IN ('signed', 'active', 'completed')
+    AND json_extract(contract.terms_canonical, '$.proposalId') = NEW.proposal_id
+    AND json_extract(contract.terms_canonical, '$.sharesIssued') = NEW.shares_issued
+    AND json_extract(contract.terms_canonical, '$.pricePerShareCents') =
+      NEW.price_per_share_cents
+) OR NOT EXISTS (
+  SELECT 1 FROM ownership_stakes stake
+  WHERE stake.run_id = NEW.run_id AND stake.id = NEW.ownership_stake_id
+    AND stake.company_id = NEW.company_id AND stake.holder_kind = 'venture_fund'
+    AND stake.holder_id = NEW.investor_id AND stake.shares = NEW.shares_issued
+    AND stake.acquired_via = 'investment' AND stake.source_event_id = NEW.source_event_id
+) OR NOT EXISTS (
+  SELECT 1 FROM company_cap_tables cap
+  WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
+    AND cap.total_shares = NEW.total_shares_after
+    AND cap.last_event_id = NEW.source_event_id
+) OR NOT EXISTS (
+  SELECT 1 FROM vc_fund_deployments deployment
+  WHERE deployment.run_id = NEW.run_id AND deployment.fund_id = NEW.investor_id
+    AND deployment.target_company_id = NEW.company_id
+    AND deployment.reference_id = NEW.proposal_id
+    AND deployment.amount_cents = NEW.amount_cents
+) OR NOT EXISTS (
+  SELECT 1 FROM ledger_transactions transaction_row
+  JOIN vc_fund_accounts fund_account
+    ON fund_account.run_id = transaction_row.run_id
+    AND fund_account.fund_id = NEW.investor_id
+  WHERE transaction_row.run_id = NEW.run_id AND transaction_row.id = NEW.transaction_id
+    AND transaction_row.kind = 'transfer'
+    AND EXISTS (
+      SELECT 1 FROM ledger_transaction_legs leg
+      WHERE leg.run_id = NEW.run_id AND leg.transaction_id = NEW.transaction_id
+        AND leg.account_id = fund_account.account_id AND leg.direction = 'credit'
+        AND leg.amount_cents = NEW.amount_cents
+    )
+    AND EXISTS (
+      SELECT 1 FROM ledger_transaction_legs leg
+      JOIN bank_accounts company_account
+        ON company_account.run_id = leg.run_id AND company_account.id = leg.account_id
+      WHERE leg.run_id = NEW.run_id AND leg.transaction_id = NEW.transaction_id
+        AND leg.direction = 'debit' AND leg.amount_cents = NEW.amount_cents
+        AND company_account.owner_kind = 'company'
+        AND company_account.owner_id = NEW.company_id
+        AND company_account.account_type = 'checking'
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'investment close lacks matching proposal, contract, cash, or shares'); END;
+CREATE TRIGGER investments_validate_capital_call
+BEFORE INSERT ON investments
+WHEN NEW.capital_call_transaction_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM ledger_transactions transaction_row
+  JOIN vc_fund_accounts fund_account
+    ON fund_account.run_id = transaction_row.run_id
+    AND fund_account.fund_id = NEW.investor_id
+  WHERE transaction_row.run_id = NEW.run_id
+    AND transaction_row.id = NEW.capital_call_transaction_id
+    AND transaction_row.kind = 'row_settlement'
+    AND EXISTS (
+      SELECT 1 FROM ledger_transaction_legs fund_leg
+      WHERE fund_leg.run_id = NEW.run_id
+        AND fund_leg.transaction_id = NEW.capital_call_transaction_id
+        AND fund_leg.account_id = fund_account.account_id
+        AND fund_leg.direction = 'debit'
+        AND CAST(fund_leg.amount_cents AS INTEGER) <= CAST(NEW.amount_cents AS INTEGER)
+    )
+    AND EXISTS (
+      SELECT 1 FROM ledger_transaction_legs row_leg
+      JOIN bank_accounts row_account
+        ON row_account.run_id = row_leg.run_id AND row_account.id = row_leg.account_id
+      WHERE row_leg.run_id = NEW.run_id
+        AND row_leg.transaction_id = NEW.capital_call_transaction_id
+        AND row_leg.direction = 'credit' AND row_account.owner_kind = 'system_row'
+        AND row_leg.amount_cents = (
+          SELECT fund_leg.amount_cents FROM ledger_transaction_legs fund_leg
+          WHERE fund_leg.run_id = NEW.run_id
+            AND fund_leg.transaction_id = NEW.capital_call_transaction_id
+            AND fund_leg.account_id = fund_account.account_id
+        )
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'investment capital call is not an exact ROW-to-fund settlement'); END;
+CREATE TRIGGER investments_no_update BEFORE UPDATE ON investments
+BEGIN SELECT RAISE(ABORT, 'investments are immutable'); END;
+CREATE TRIGGER investments_no_delete BEFORE DELETE ON investments
+BEGIN SELECT RAISE(ABORT, 'investments are immutable'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -4260,6 +4678,12 @@ const MIGRATIONS: readonly Migration[] = [
     version: 32,
     name: "phase_8_investment_proposals",
     sql: PHASE_8_INVESTMENT_PROPOSALS,
+    requiresForeignKeysOff: true,
+  },
+  {
+    version: 33,
+    name: "phase_8_investment_closing",
+    sql: PHASE_8_INVESTMENT_CLOSING,
     requiresForeignKeysOff: true,
   },
 ];

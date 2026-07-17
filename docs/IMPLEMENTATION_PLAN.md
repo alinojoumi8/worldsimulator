@@ -404,10 +404,10 @@ Rules: each phase ends **runnable + tests green**; no phase starts before its de
 - **Deps:** Phase 6. **Risks:** believability tuning absorbing unbounded time (timebox; ship envelopes).
 
 ### Phase 8 — Investments and venture capital [V1]
-- **Status (2026-07-16):** WS-801–802 complete; WS-803 exact cap-table closing is next.
+- **Status (2026-07-16):** WS-801–803 complete; WS-804 exact distributions are next.
 - **Goal:** FR-INV: pitch → Tier 3 negotiation → term validation → close → cap table.
 - **Modules:** M10, M05 (negotiation kinds), M11 (investment contracts).
-- **Backend:** WS-801 persists run-scoped VC firms, funds, and immutable deployment chains with exact integer-cent accounting and a hard `deployed <= fundSize` boundary. WS-802 adds deterministic founder pitch triggers, provider-neutral Tier-3 investment conversations, exact bounded terms, outcome revalidation, typed rejection, and expiry. Remaining work is atomic negotiated close, cap-table math, and distributions. **Frontend:** investment pages, cap tables, negotiation transcripts. **API:** investments, proposals. **DB:** `vc_firms`, `vc_funds`, `vc_fund_deployments`, and `investment_proposals` are live; closed investments and generalized ownership stakes follow in WS-803–804.
+- **Backend:** WS-801 persists run-scoped VC firms, funds, and immutable deployment chains with exact integer-cent accounting and a hard `deployed <= fundSize` boundary. WS-802 adds deterministic founder pitch triggers, provider-neutral Tier-3 investment conversations, exact bounded terms, outcome revalidation, typed rejection, and expiry. WS-803 validates exact integer-share priced rounds and atomically closes the investment contract, ROW-backed fund draw, domestic cash transfer, deployment, immutable stake, cap-table revision, proposal, and completion event. Remaining backend work is exact pro-rata distributions. **Frontend:** investment pages, cap tables, negotiation transcripts. **API:** investments, proposals. **DB:** firms, funds, fund cash links, deployments, proposals, generalized cap tables and ownership stakes, investment contracts, and completed investments are live; distributions follow in WS-804.
 - **Tests:** INV-4 property suite; negotiation-outcome extraction; dilution goldens.
 - **Exit criteria:** default world closes ≥1 negotiated investment in 360 ticks; all math exact.
 - **Deps:** Phase 7. **Risks:** negotiation quality (routing to opus tier for these calls; transcripts reviewable).

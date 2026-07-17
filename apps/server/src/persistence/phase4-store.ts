@@ -1515,24 +1515,45 @@ export class SqlitePhase4Store {
           }, { correlationId, causationId: source.eventId });
           break;
         }
-        case "capitalized":
+        case "capitalized": {
+          const equityEvent = ctx.emit("company.equity.issued", {
+            companyId,
+            ownerAgentId: row.founder_agent_id,
+            shares: row.total_shares,
+          });
+          const ownershipStakeId = ctx.ids.next("stk");
+          this.db.prepare(`
+            INSERT INTO company_cap_tables(
+              run_id, company_id, company_kind, total_shares, revision, last_event_id
+            ) VALUES (?, ?, 'dynamic', ?, 0, ?)
+          `).run(this.runId, companyId, row.total_shares, equityEvent.eventId);
           this.db.prepare(`
             INSERT INTO company_equity_stakes (
               run_id, company_id, owner_agent_id, shares, issued_tick
             ) VALUES (?, ?, ?, ?, ?)
           `).run(this.runId, companyId, row.founder_agent_id, row.total_shares, ctx.tick);
+          this.db.prepare(`
+            INSERT INTO ownership_stakes(
+              run_id, id, company_id, holder_kind, holder_id, shares,
+              acquired_via, since_tick, source_event_id
+            ) VALUES (?, ?, ?, 'agent', ?, ?, 'founding', ?, ?)
+          `).run(
+            this.runId,
+            ownershipStakeId,
+            companyId,
+            row.founder_agent_id,
+            row.total_shares,
+            ctx.tick,
+            equityEvent.eventId,
+          );
           this.updateCompanyStage(companyId, "active", "active", { activatedTick: ctx.tick });
           this.appendCompanyTimeline(ctx.ids, companyId, ctx.tick, "company.activated", {
             founderAgentId: row.founder_agent_id,
             shares: row.total_shares,
           });
-          ctx.emit("company.equity.issued", {
-            companyId,
-            ownerAgentId: row.founder_agent_id,
-            shares: row.total_shares,
-          });
           ctx.emit("company.activated", { companyId, activatedTick: ctx.tick });
           break;
+        }
         case "active":
           break;
       }

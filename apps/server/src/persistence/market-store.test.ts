@@ -18,7 +18,12 @@ import { SqliteFinanceStore } from "./finance-store";
 import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { computeLogicalStateHash, SqliteSnapshotStore } from "./snapshot-store";
-import { insertTestRun, TEST_RUN_ID, TEST_SIMULATION_ID } from "./test-helpers";
+import {
+  appendTestTickEvent,
+  insertTestRun,
+  TEST_RUN_ID,
+  TEST_SIMULATION_ID,
+} from "./test-helpers";
 import { readRunCheckpoint } from "./tick-committer";
 
 const directories: string[] = [];
@@ -72,10 +77,20 @@ function fixture() {
     rng: (key) => Rng.root(42).fork(`${tick}.${phase}.${key}`),
     count: () => undefined,
     setDigestIndicators: () => undefined,
-    emit: (type, payload) => {
-      const eventId = ids.next("evt");
-      events.push({ type, eventId, payload });
-      return { eventId } as EventEnvelope;
+    emit: (type, payload, options) => {
+      const event = appendTestTickEvent(db, {
+        simulationId: TEST_SIMULATION_ID,
+        runId: TEST_RUN_ID,
+        ids,
+        tick,
+        simDate: `Y0001-M01-D${String(tick + 1).padStart(2, "0")}`,
+        phase,
+        type,
+        payload,
+        options,
+      });
+      events.push({ type, eventId: event.eventId, payload });
+      return event;
     },
   });
 
@@ -592,10 +607,10 @@ describe("WS-404/405 snapshot equivalence", () => {
       quantity: 1,
       expectedUnitPriceCents: "400",
       tick: 7,
-      requestEventId: ids.next("evt"),
+      requestEventId: ids.next("req"),
       ids,
     });
-    const paymentSourceEventId = ids.next("evt");
+    const paymentSourceEventId = ids.next("src");
     market.settleOrder(placement.order.id, 7, ids, (request) => {
       const refreshed = accounts.map((account) => finance.accountForAgent(account.ownerId));
       const transaction = postPurchase({
@@ -624,10 +639,9 @@ describe("WS-404/405 snapshot equivalence", () => {
       decisionId: priceDecisionId,
       newPriceCents: "450",
     }, context(7, "decisions"));
-    const snapshotIdState = { ...ids.serialize(), evt: 0 };
     db.prepare(`
       UPDATE simulation_runs SET current_tick = 7, id_state_canonical = ? WHERE id = ?
-    `).run(canonicalStringify(snapshotIdState), TEST_RUN_ID);
+    `).run(canonicalStringify(ids.serialize()), TEST_RUN_ID);
 
     const snapshots = new SqliteSnapshotStore(
       db,

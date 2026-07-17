@@ -49,11 +49,13 @@ function fixture() {
   const ids = IdFactory.restore(population.idState);
   new SqliteFinanceStore(db, TEST_RUN_ID).initialize(population, ids);
   const firmEventId = ids.next("evt");
+  const fundAccountEventId = ids.next("evt");
   const fundEventId = ids.next("evt");
   const store = new SqliteVentureStore(db, TEST_RUN_ID);
   const initialized = store.initializeFoundry({
     ids,
     firmSourceEventId: firmEventId,
+    fundAccountSourceEventId: fundAccountEventId,
     fundSourceEventId: fundEventId,
   });
   const events = new SqliteEventStore(db, TEST_RUN_ID);
@@ -73,8 +75,8 @@ function fixture() {
       payload: { firmId: initialized.firm.id },
     },
     {
-      eventId: fundEventId,
-      type: "venture.fund.created",
+      eventId: fundAccountEventId,
+      type: "account.opened",
       schemaVersion: 1,
       simulationId: TEST_SIMULATION_ID,
       runId: TEST_RUN_ID,
@@ -82,9 +84,24 @@ function fixture() {
       tick: 0,
       simDate: "Y0001-M01-D01",
       wallTime: "T0",
-      actor: { kind: "institution", id: initialized.firm.id },
+      actor: { kind: "system", id: "venture-capital" },
       correlationId: "venture-seed",
       causationId: firmEventId,
+      payload: { accountId: initialized.fundAccount.id },
+    },
+    {
+      eventId: fundEventId,
+      type: "venture.fund.created",
+      schemaVersion: 1,
+      simulationId: TEST_SIMULATION_ID,
+      runId: TEST_RUN_ID,
+      seq: 2,
+      tick: 0,
+      simDate: "Y0001-M01-D01",
+      wallTime: "T0",
+      actor: { kind: "institution", id: initialized.firm.id },
+      correlationId: "venture-seed",
+      causationId: fundAccountEventId,
       payload: { fundId: initialized.fund.id },
     },
   ]);
@@ -156,10 +173,17 @@ describe("SqliteVentureStore", () => {
     expect(base.store.listFirms()).toEqual([base.initialized.firm]);
     expect(base.initialized.fund).toMatchObject({
       firmId: FOUNDRY_CAPITAL_ID,
+      bankAccountId: base.initialized.fundAccount.id,
       fundSizeCents: FOUNDRY_FUND_SIZE_CENTS,
       deployedCents: "0",
       status: "open",
     });
+    const firmAccounts = new SqliteFinanceStore(base.db, TEST_RUN_ID).listAccounts()
+      .filter((account) => account.ownerKind === "company" &&
+        account.ownerId === FOUNDRY_CAPITAL_ID && account.type === "checking");
+    expect(firmAccounts).toHaveLength(2);
+    expect(firmAccounts.map((account) => account.id))
+      .toContain(base.initialized.fundAccount.id);
 
     const first = base.store.deployCapital({
       fundId: base.initialized.fund.id,

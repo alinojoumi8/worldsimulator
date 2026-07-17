@@ -108,11 +108,13 @@ function fixture() {
   finance.initialize(population, ids);
 
   const firmEventId = ids.next("evt");
+  const fundAccountEventId = ids.next("evt");
   const fundEventId = ids.next("evt");
   const venture = new SqliteVentureStore(db, TEST_RUN_ID);
   const initialized = venture.initializeFoundry({
     ids,
     firmSourceEventId: firmEventId,
+    fundAccountSourceEventId: fundAccountEventId,
     fundSourceEventId: fundEventId,
   });
   const initialEvents = new SqliteEventStore(db, TEST_RUN_ID);
@@ -132,8 +134,8 @@ function fixture() {
       payload: { firmId: initialized.firm.id },
     },
     {
-      eventId: fundEventId,
-      type: "venture.fund.created",
+      eventId: fundAccountEventId,
+      type: "account.opened",
       schemaVersion: 1,
       simulationId: TEST_SIMULATION_ID,
       runId: TEST_RUN_ID,
@@ -141,9 +143,24 @@ function fixture() {
       tick: 0,
       simDate: simDateForTick(0),
       wallTime: "T0",
-      actor: { kind: "institution", id: initialized.firm.id },
+      actor: { kind: "system", id: "venture-capital" },
       correlationId: "venture-seed",
       causationId: firmEventId,
+      payload: { accountId: initialized.fundAccount.id },
+    },
+    {
+      eventId: fundEventId,
+      type: "venture.fund.created",
+      schemaVersion: 1,
+      simulationId: TEST_SIMULATION_ID,
+      runId: TEST_RUN_ID,
+      seq: 2,
+      tick: 0,
+      simDate: simDateForTick(0),
+      wallTime: "T0",
+      actor: { kind: "institution", id: initialized.firm.id },
+      correlationId: "venture-seed",
+      causationId: fundAccountEventId,
       payload: { fundId: initialized.fund.id },
     },
   ]);

@@ -73,6 +73,8 @@ function templateObligations(input: ContractTemplateInput): LegalObligation[] {
         amountCents: input.terms.rentCents,
         endTick: input.terms.endTick,
       })];
+    case "investment":
+      return [];
   }
 }
 
