@@ -9,6 +9,7 @@ test("creates Riverbend and traces a shock from citizens and credit into CPI", a
   await page.getByLabel("Simulation name").fill("WS-708 causal acceptance");
   await page.getByLabel("Seed").fill("42");
   await page.getByLabel("End tick").fill("31");
+  await page.getByLabel("LLM mode").selectOption("mock");
   await page.getByRole("button", { name: "Create Riverbend run" }).click();
 
   await expect(page).toHaveURL(/\/simulations\/sim_[0-9a-z]{8}$/);

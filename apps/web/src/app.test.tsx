@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./app";
 
@@ -36,7 +36,29 @@ describe("WorldTangle app shell", () => {
       .toBe("Riverbend baseline");
     expect((screen.getByLabelText("Seed") as HTMLInputElement).value).toBe("42");
     expect((screen.getByLabelText("End tick") as HTMLInputElement).value).toBe("360");
+    expect((screen.getByLabelText("LLM mode") as HTMLSelectElement).value).toBe("live");
+    expect((screen.getByLabelText("Agent tokens · daily") as HTMLInputElement).value)
+      .toBe("128000");
+    expect(screen.getByText("Tier-2 decisions call MiniMax M3 and count against the run budget."))
+      .toBeTruthy();
     expect(screen.getByText(/not financial, legal, or political advice/i)).toBeTruthy();
+  });
+
+  it("submits new Riverbend simulations in live MiniMax mode by default", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await screen.findByText("No worlds on the ledger yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Riverbend run" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true);
+    });
+    const createCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      scenario: { llmMode: "live" },
+    });
   });
 
   it("keeps the simulation disclaimer on unmatched routes", () => {
@@ -66,7 +88,8 @@ describe("WorldTangle app shell", () => {
       outputTokens: 0,
       costCentsEstimate: "0",
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
       const path = String(input);
       if (path.includes("/stream")) {
         return new Response("", { status: 401 });
@@ -119,6 +142,25 @@ describe("WorldTangle app shell", () => {
             },
           },
           errors: { last24Ticks: 0 },
+          activity: {
+            committedEvents: 8,
+            latestEventSeq: 7,
+            latestDigest: {
+              v: 1,
+              tick: 2,
+              simDate: "Y0001-M01-D03",
+              indicators: {},
+              counts: {
+                events: 3,
+                transactions: 2,
+                decisions: 1,
+                llmCalls: 0,
+                rejectedIntents: 0,
+              },
+              notable: [],
+              spend: { budgetPct: 0 },
+            },
+          },
           task: null,
           meta,
         }), { status: 200, headers: { "content-type": "application/json" } });
@@ -163,6 +205,8 @@ describe("WorldTangle app shell", () => {
     expect(screen.getByText("$1250.00")).toBeTruthy();
     expect(screen.getByText("$31500.00")).toBeTruthy();
     expect(screen.getByText("7.25%")).toBeTruthy();
+    expect(screen.getAllByText("Through event #7")).toHaveLength(2);
+    expect(screen.getByText("Latest committed tick activity · tick 2")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Money supply from tick 0 through tick 2" }))
       .toBeTruthy();
     expect(fetchMock.mock.calls.some(([input]) => (
@@ -170,5 +214,10 @@ describe("WorldTangle app shell", () => {
         "series=gdpProxy%2Ccpi%2Cm1%2CaverageWage%2CunemploymentRate%2CcreditOutstanding%2CdefaultRate%2CbusinessCount%2CtreasuryBalance%2CsentimentIndex&max=5000",
       )
     ))).toBe(true);
+    await waitFor(() => {
+      const streamCall = fetchMock.mock.calls.find(([input]) => String(input).includes("/stream"));
+      expect(streamCall).toBeDefined();
+      expect(new Headers(streamCall?.[1]?.headers).get("Last-Event-ID")).toBe("7");
+    });
   });
 });

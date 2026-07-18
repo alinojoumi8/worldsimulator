@@ -18,6 +18,9 @@ interface SimulationStreamOptions {
   readonly simulationId: string;
   readonly runId?: string;
   readonly token: string;
+  readonly enabled?: boolean;
+  /** Durable sequence to tail from when this run is first connected. */
+  readonly initialLastEventId?: number;
   readonly onDigest: (data: DigestStreamData) => void;
   readonly onLifecycle: (data: LifecycleStreamData) => void;
   readonly onGap: (data: GapStreamData) => void;
@@ -50,11 +53,37 @@ export function useSimulationStream(options: SimulationStreamOptions): {
   const [connectionState, setConnectionState] = useState<StreamConnectionState>("connecting");
   const [lastEventId, setLastEventId] = useState<number>();
   const sequence = useRef<number | undefined>(undefined);
+  const streamKey = `${options.simulationId}\u0000${options.runId ?? ""}\u0000${options.token}`;
+  const connectedKey = useRef<string | undefined>(undefined);
+  const bootstrap = useRef<{
+    readonly key: string;
+    readonly lastEventId?: number;
+  }>({
+    key: streamKey,
+    ...(options.initialLastEventId === undefined
+      ? {}
+      : { lastEventId: options.initialLastEventId }),
+  });
+  if (bootstrap.current.key !== streamKey || connectedKey.current !== streamKey) {
+    bootstrap.current = {
+      key: streamKey,
+      ...(options.initialLastEventId === undefined
+        ? {}
+        : { lastEventId: options.initialLastEventId }),
+    };
+  }
 
   useEffect(() => {
+    if (options.enabled === false) {
+      sequence.current = undefined;
+      setLastEventId(undefined);
+      setConnectionState("connecting");
+      return undefined;
+    }
     const controller = new AbortController();
-    sequence.current = undefined;
-    setLastEventId(undefined);
+    connectedKey.current = streamKey;
+    sequence.current = bootstrap.current.lastEventId;
+    setLastEventId(bootstrap.current.lastEventId);
     setConnectionState("connecting");
 
     const deliver = (frame: EventStreamFrame): void => {
@@ -98,12 +127,14 @@ export function useSimulationStream(options: SimulationStreamOptions): {
 
     return () => controller.abort();
   }, [
+    options.enabled,
     options.onDigest,
     options.onGap,
     options.onLifecycle,
     options.runId,
     options.simulationId,
     options.token,
+    streamKey,
   ]);
 
   return {

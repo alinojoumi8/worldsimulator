@@ -16,6 +16,7 @@ import type { WorldDatabase } from "./database";
 import { SqliteEnergyStore } from "./energy-store";
 import { SqliteFinanceStore } from "./finance-store";
 import { SqliteInsolvencyStore } from "./insolvency-store";
+import { SqliteInvestmentStore } from "./investment-store";
 import { SqliteMarketStore } from "./market-store";
 import { SqlitePhase4Store } from "./phase4-store";
 import { SqliteVentureStore } from "./venture-store";
@@ -161,19 +162,23 @@ export class SqlitePhase4ReadStore {
   getCompany(companyId: string): Readonly<Record<string, unknown>> {
     const company = this.phase4.getCompany(companyId);
     const founder = this.namedAgent(company.founderAgentId);
-    const capTableRows = this.db.prepare<[string, string], {
-      owner_agent_id: string;
-      shares: string;
-    }>(`
-      SELECT owner_agent_id, shares FROM company_equity_stakes
-      WHERE run_id = ? AND company_id = ? ORDER BY owner_agent_id
-    `).all(this.runId, company.id);
-    const totalShares = BigInt(company.totalShares);
-    const capTable = capTableRows.map((row) => ({
-      holder: this.namedAgent(row.owner_agent_id),
-      shares: row.shares,
-      ownershipBp: Number((BigInt(row.shares) * 10_000n) / totalShares),
-    }));
+    const capTableSnapshot = new SqliteInvestmentStore(this.db, this.runId)
+      .capTable(company.id);
+    const venture = new SqliteVentureStore(this.db, this.runId);
+    const totalShares = BigInt(capTableSnapshot.totalShares);
+    const capTable = capTableSnapshot.stakes.map((stake) => {
+      const holder = stake.holderKind === "agent"
+        ? { kind: "agent" as const, ...this.namedAgent(stake.holderId) }
+        : (() => {
+            const fund = venture.getFund(stake.holderId);
+            return { kind: "venture_fund" as const, id: fund.id, name: fund.name };
+          })();
+      return {
+        holder,
+        shares: stake.shares,
+        ownershipBp: Number((BigInt(stake.shares) * 10_000n) / totalShares),
+      };
+    });
     const staff = this.db.prepare<[string, string], {
       id: string;
       employee_agent_id: string;

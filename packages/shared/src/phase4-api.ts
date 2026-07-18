@@ -25,6 +25,7 @@ import {
   productCatalogItemSchema,
   productSkuSchema,
 } from "./market";
+import { ventureFundIdSchema } from "./venture";
 
 const positiveIntegerQuery = z.coerce.number().int().min(1).safe();
 const nonnegativeInteger = z.number().int().nonnegative().safe();
@@ -65,6 +66,17 @@ export const namedAgentSchema = z.object({
   id: agentIdSchema,
   name: z.string().trim().min(1).max(120),
 }).strict();
+
+export const companyEquityHolderSchema = z.discriminatedUnion("kind", [
+  namedAgentSchema.extend({
+    kind: z.literal("agent"),
+  }).strict(),
+  z.object({
+    kind: z.literal("venture_fund"),
+    id: ventureFundIdSchema,
+    name: z.string().trim().min(1).max(120),
+  }).strict(),
+]);
 
 export const companyListItemSchema = z.object({
   id: companyIdSchema,
@@ -110,7 +122,7 @@ export const companyDetailResponseSchema = z.object({
     founder: namedAgentSchema,
   }).strict(),
   capTable: z.array(z.object({
-    holder: namedAgentSchema,
+    holder: companyEquityHolderSchema,
     shares: z.string().regex(/^[1-9]\d*$/),
     ownershipBp: z.number().int().min(0).max(10_000),
   }).strict()),

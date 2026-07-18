@@ -13,6 +13,7 @@ export * from "./founder-venture-store";
 export * from "./insolvency-store";
 export * from "./investment-proposal-store";
 export * from "./investment-distribution-store";
+export * from "./investment-read-store";
 export * from "./investment-store";
 export * from "./loan-collection-store";
 export * from "./llm-cache-store";

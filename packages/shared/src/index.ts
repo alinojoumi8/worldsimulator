@@ -12,6 +12,7 @@ export * from "./export";
 export * from "./event-stream";
 export * from "./finance";
 export * from "./insolvency";
+export * from "./investment-api";
 export * from "./json-schema";
 export * from "./legal";
 export * from "./llm-control";

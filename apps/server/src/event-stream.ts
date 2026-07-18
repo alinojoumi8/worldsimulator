@@ -16,6 +16,7 @@ import {
 import { openDatabaseFile } from "./persistence/database";
 import { SqliteEventStore } from "./persistence/event-store";
 import { RunLocator, type RunLocation } from "./persistence/run-locator";
+import { digestForCommittedEvent } from "./run-digest";
 
 export const EVENT_STREAM_TOPICS = ["digest", "lifecycle"] as const;
 export type EventStreamTopic = (typeof EVENT_STREAM_TOPICS)[number];
@@ -80,10 +81,6 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
     : {};
 }
 
-function nonnegativeInteger(value: unknown): number {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
-}
-
 function lifecycleStatus(event: EventEnvelope): string {
   const status = record(event.payload)["status"];
   if (typeof status === "string" && status.length > 0) return status;
@@ -96,27 +93,12 @@ export function frameForCommittedEvent(
   topics: ReadonlySet<EventStreamTopic>,
 ): SseFrame | undefined {
   if (event.type === "simulation.tick.completed" && topics.has("digest")) {
-    const payload = record(event.payload);
-    const counts = record(payload["counts"]);
-    const indicators = record(payload["indicators"]);
+    const digest = digestForCommittedEvent(event);
+    if (digest === undefined) return undefined;
     return {
       id: event.seq,
       event: "digest",
-      data: {
-        v: 1,
-        tick: event.tick,
-        simDate: event.simDate,
-        indicators,
-        counts: {
-          events: nonnegativeInteger(counts["events"]),
-          transactions: nonnegativeInteger(counts["transactions"]),
-          decisions: nonnegativeInteger(counts["decisions"]),
-          llmCalls: nonnegativeInteger(counts["llmCalls"]),
-          rejectedIntents: nonnegativeInteger(counts["rejectedIntents"]),
-        },
-        notable: [],
-        spend: { budgetPct: 0 },
-      },
+      data: digest,
     };
   }
 
@@ -302,6 +284,10 @@ class StreamConnection {
   start(): void {
     this.response.once("close", this.handleRemoteClose);
     this.response.once("error", this.handleResponseError);
+    // Send a comment immediately so development/reverse proxies expose the
+    // established response before the first committed frame or heartbeat.
+    this.write(":connected\n\n");
+    if (this.closed) return;
     this.poll();
     if (this.closed) return;
     this.pollTimer = setInterval(this.poll, this.pollIntervalMs);

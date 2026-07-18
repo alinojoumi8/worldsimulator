@@ -272,6 +272,13 @@ describe("Phase 1 simulation API", () => {
       endTick: 360,
     });
     expect(object(statusBody["llm"])).toMatchObject({ mode: "mock", budgetPct: 0 });
+    const activity = object(statusBody["activity"]);
+    expect(activity["committedEvents"]).toBeTypeOf("number");
+    expect(activity["latestEventSeq"]).toBe(Number(activity["committedEvents"]) - 1);
+    expect(object(activity["latestDigest"])).toMatchObject({
+      tick: 2,
+      counts: { events: 2, transactions: 0, decisions: 0, llmCalls: 0 },
+    });
   });
 
   it("re-executes a terminal run from its manifest, journal, and cache", async () => {

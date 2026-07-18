@@ -23,6 +23,14 @@ import {
   injectWorldEventRequestSchema,
   institutionListQuerySchema,
   institutionPathSchema,
+  investmentCapTablePathSchema,
+  investmentDistributionListQuerySchema,
+  investmentDistributionPathSchema,
+  investmentListQuerySchema,
+  investmentPathSchema,
+  investmentProposalListQuerySchema,
+  investmentProposalPathSchema,
+  investmentRunQuerySchema,
   jobListQuerySchema,
   jobPathSchema,
   loanListQuerySchema,
@@ -52,6 +60,9 @@ import {
   type IndicatorSeriesQuery,
   type InjectWorldEventRequest,
   type InstitutionListQuery,
+  type InvestmentDistributionListQuery,
+  type InvestmentListQuery,
+  type InvestmentProposalListQuery,
   type JobListQuery,
   type LoanListQuery,
   type LlmControlRequest,
@@ -129,6 +140,35 @@ export interface SimulationApi {
   ): MaybePromise<ApiBody>;
   listCompanies(simulationId: string, query: CompanyListQuery): MaybePromise<ApiBody>;
   getCompany(simulationId: string, companyId: string, runId?: string): MaybePromise<ApiBody>;
+  listInvestmentProposals(
+    simulationId: string,
+    query: InvestmentProposalListQuery,
+  ): MaybePromise<ApiBody>;
+  getInvestmentProposal(
+    simulationId: string,
+    proposalId: string,
+    runId?: string,
+  ): MaybePromise<ApiBody>;
+  listInvestments(simulationId: string, query: InvestmentListQuery): MaybePromise<ApiBody>;
+  getInvestment(
+    simulationId: string,
+    investmentId: string,
+    runId?: string,
+  ): MaybePromise<ApiBody>;
+  getInvestmentCapTable(
+    simulationId: string,
+    companyId: string,
+    runId?: string,
+  ): MaybePromise<ApiBody>;
+  listInvestmentDistributions(
+    simulationId: string,
+    query: InvestmentDistributionListQuery,
+  ): MaybePromise<ApiBody>;
+  getInvestmentDistribution(
+    simulationId: string,
+    distributionId: string,
+    runId?: string,
+  ): MaybePromise<ApiBody>;
   listContracts(simulationId: string, query: ContractListQuery): MaybePromise<ApiBody>;
   getContract(simulationId: string, contractId: string, runId?: string): MaybePromise<ApiBody>;
   listJobs(simulationId: string, query: JobListQuery): MaybePromise<ApiBody>;
@@ -328,6 +368,77 @@ export function registerSimulationRoutes(
     const body = await service.getCompany(simId, companyId, runId);
     return reply.code(200).send(withMeta(body));
   });
+
+  app.get(
+    "/api/v1/simulations/:simId/companies/:companyId/cap-table",
+    async (request, reply) => {
+      const { simId, companyId } = validate(investmentCapTablePathSchema, request.params);
+      const { runId } = validate(investmentRunQuerySchema, request.query);
+      const body = await service.getInvestmentCapTable(simId, companyId, runId);
+      return reply.code(200).send(withMeta(body));
+    },
+  );
+
+  app.get("/api/v1/simulations/:simId/investment-proposals", async (request, reply) => {
+    const { simId } = validate(simulationPathSchema, request.params);
+    const query = validate(investmentProposalListQuerySchema, request.query);
+    const body = await service.listInvestmentProposals(simId, query);
+    return reply.code(200).send(withMeta(body));
+  });
+
+  app.get(
+    "/api/v1/simulations/:simId/investment-proposals/:proposalId",
+    async (request, reply) => {
+      const { simId, proposalId } = validate(investmentProposalPathSchema, request.params);
+      const { runId } = validate(investmentRunQuerySchema, request.query);
+      const body = await service.getInvestmentProposal(simId, proposalId, runId);
+      return reply.code(200).send(withMeta(body));
+    },
+  );
+
+  app.get("/api/v1/simulations/:simId/investments", async (request, reply) => {
+    const { simId } = validate(simulationPathSchema, request.params);
+    const query = validate(investmentListQuerySchema, request.query);
+    const body = await service.listInvestments(simId, query);
+    return reply.code(200).send(withMeta(body));
+  });
+
+  app.get(
+    "/api/v1/simulations/:simId/investments/:investmentId",
+    async (request, reply) => {
+      const { simId, investmentId } = validate(investmentPathSchema, request.params);
+      const { runId } = validate(investmentRunQuerySchema, request.query);
+      const body = await service.getInvestment(simId, investmentId, runId);
+      return reply.code(200).send(withMeta(body));
+    },
+  );
+
+  app.get(
+    "/api/v1/simulations/:simId/investment-distributions",
+    async (request, reply) => {
+      const { simId } = validate(simulationPathSchema, request.params);
+      const query = validate(investmentDistributionListQuerySchema, request.query);
+      const body = await service.listInvestmentDistributions(simId, query);
+      return reply.code(200).send(withMeta(body));
+    },
+  );
+
+  app.get(
+    "/api/v1/simulations/:simId/investment-distributions/:distributionId",
+    async (request, reply) => {
+      const { simId, distributionId } = validate(
+        investmentDistributionPathSchema,
+        request.params,
+      );
+      const { runId } = validate(investmentRunQuerySchema, request.query);
+      const body = await service.getInvestmentDistribution(
+        simId,
+        distributionId,
+        runId,
+      );
+      return reply.code(200).send(withMeta(body));
+    },
+  );
 
   app.get("/api/v1/simulations/:simId/contracts", async (request, reply) => {
     const { simId } = validate(simulationPathSchema, request.params);
