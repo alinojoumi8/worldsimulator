@@ -1,6 +1,6 @@
 # ADR-0014 — Local-first single-node deployment; Docker later
 
-**Status:** accepted · **Date:** 2026-07-14
+**Status:** accepted, amended · **Date:** 2026-07-14 · **Amended:** 2026-07-18
 
 ## Context
 
@@ -10,10 +10,10 @@ MVP user = the owner, on Windows 11, running simulations locally. Production-sty
 
 - **Development:** `pnpm dev` runs the Fastify server in tsx watch mode at `127.0.0.1:4000` and Vite at `127.0.0.1:5173`; Vite proxies `/api` to Fastify.
 - **Production-style local run:** `pnpm build && pnpm start` builds `apps/web/dist/`, then starts Fastify on port 4000. Fastify serves `/`, `/simulations/:simId`, and exact built assets when the directory exists; without a build, API-only startup still works.
-- **Configuration:** SQLite files, snapshots, and exports live under `WORLDTANGLE_DATA_DIR` (default `./data`, gitignored). `.env.example` documents `WORLDTANGLE_PORT`, `WORLDTANGLE_BIND`, `WORLDTANGLE_API_TOKEN`, `WORLDTANGLE_DATA_DIR`, `WORLDTANGLE_TICK_INTERVAL_MS`, `WORLDTANGLE_SNAPSHOT_INTERVAL_TICKS` (default `100`), `WORLDTANGLE_SSE_POLL_INTERVAL_MS`, `WORLDTANGLE_SSE_HEARTBEAT_INTERVAL_MS`, `WORLDTANGLE_SSE_MAX_BACKLOG_EVENTS`, and `WORLDTANGLE_LOG_LEVEL`. Values must be exported by the shell or supplied through Node's env-file mechanism. Live-provider keys remain future module configuration.
+- **Configuration:** SQLite files, snapshots, and exports live under `WORLDTANGLE_DATA_DIR` (default `./data`, gitignored). `.env.example` is the complete operator-facing catalog for network, auth, provider credentials/routes/prices, data, scheduler, snapshot, SSE, acceptance, and logging variables. The server `dev` and `start` scripts load an existing repository-root `.env` with Node's `--env-file-if-exists`; live acceptance scripts do the same but retain separate consent checks. Test and gate commands do not auto-load `.env`. Provider keys remain server-only and `.env` remains gitignored.
 - **Exposure:** static dashboard files are public; the optional token guards `/api/v1/*` except health. A non-loopback bind is refused unless `WORLDTANGLE_API_TOKEN` is set (ADR-0011).
 - **CI:** GitHub Actions, windows-latest + ubuntu-latest matrix (typecheck, tests incl. determinism gate). The matrix is itself a deployment test (path/CRLF/ICU drift).
-- **Phase 7+:** single `Dockerfile` (node:24-slim, pnpm fetch, volume for data dir) + `docker compose` example — for anyone wanting a server deployment; still single-node.
+- **Phase 11 / WS-1106:** single `Dockerfile` (node:24-slim, pnpm fetch, volume for data dir) + `docker compose` example — for anyone wanting a server deployment; still single-node. It is not implemented yet.
 - **LATER (with multi-user):** Postgres profile (ADR-0004 seam), reverse proxy + TLS + real auth (ADR-0011), object storage for exports/snapshots. Explicitly **not** Kubernetes/serverless — a stateful single-writer simulator gains nothing from them at this scale.
 
 ## Alternatives considered

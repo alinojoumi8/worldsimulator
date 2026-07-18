@@ -1,6 +1,6 @@
 # ADR-0002 — Modular monolith, not microservices
 
-**Status:** accepted · **Date:** 2026-07-14
+**Status:** accepted, amended · **Date:** 2026-07-14 · **Amended:** 2026-07-18
 
 ## Context
 
@@ -8,7 +8,7 @@ The system decomposes into ~26 modules (IMPLEMENTATION_PLAN §2). A tick is a ti
 
 ## Decision
 
-A **modular monolith**: one process, one database transaction per tick, modules as folders with enforced public interfaces (`index.ts` only entry, lint-enforced), communicating via the in-process event bus (ADR-0003) and explicit interfaces. Module boundaries are drawn as if they were services (each owns its data exclusively — DOMAIN_MODEL §5) so later extraction is mechanical, but no network hops exist today.
+A **modular monolith**: one process and one database transaction per tick. `packages/shared`, `packages/engine`, `apps/server`, and `apps/web` are the physical package boundaries; M01–M26 are logical ownership boundaries implemented by package-local files and injected persistence/provider interfaces. Workspace consumers use package exports, while server-local wiring composes its own adapters directly. The in-process event bus and explicit interfaces preserve deterministic coordination (ADR-0003), and the ownership table in DOMAIN_MODEL §5 defines which module may mutate each record. No network hops exist today.
 
 ## Alternatives considered
 
@@ -19,5 +19,5 @@ A **modular monolith**: one process, one database transaction per tick, modules 
 ## Consequences
 
 - Atomic tick commits are trivial (one SQLite transaction).
-- Boundary discipline must be enforced by tooling (dependency-cruiser/eslint boundaries + pnpm strictness), not by network topology.
+- Boundary discipline currently comes from pnpm workspace dependency declarations, strict TypeScript/package exports, ownership-focused tests, and review. ESLint enforces the deterministic-core restrictions, but a dedicated dependency-cruiser/import-boundary rule is not installed and must not be treated as an existing gate.
 - Scale-out path documented: extract regions/read-models first; module ownership tables make the split lines explicit.

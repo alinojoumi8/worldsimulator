@@ -87,5 +87,4 @@ and binding all roll back together.
 Verified on 2026-07-15 with strict type-check, lint, 101 test files (563 tests),
 and the production web build.
 
-WS-608 is next: LLM telemetry and errors APIs plus the conversation, budget, and
-errors UI.
+Follow-on WS-608 is now implemented: LLM telemetry and errors APIs plus the conversation, budget, quarantine, and errors UI. See [WS-608 evidence](WS_608_LLM_OBSERVABILITY.md).

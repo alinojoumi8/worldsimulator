@@ -22,15 +22,18 @@ Frontend ⇄ backend contract. The frontend consumes the shared schemas describe
   Standard codes: `VALIDATION_FAILED` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409 — incl. illegal lifecycle transitions), `LIMIT_EXCEEDED` (429), `BUDGET_EXHAUSTED` (409), `INTERNAL` (500).
 - **Pagination (all list endpoints):** cursor-based — request `?limit=50&cursor=<opaque>`; response `{"items":[...], "nextCursor": "…"|null, "meta":{...}}`. `limit` 1–200, default 50. Ordering is documented per endpoint and always deterministic. Cursors are opaque and expire with the run.
 - **Common query params:** `runId` (defaults to the simulation's latest run), `fromTick`/`toTick` ranges where noted.
+- **Implementation labels:** endpoints without a label are registered today. **Planned** endpoints document an approved future contract but are not registered by the current server.
 
 ## 2. REST endpoints
 
 ### 2.1 Platform
 
+**GET `/api/v1`** — API discovery document. Response 200: `{"name":"WorldTangle","simulated":true,"apiVersion":1,"engineVersion":"0.1.0","eventSchemaVersion":1,"rulesetVersion":1,"promptPackVersion":1,"links":{"health":"/api/v1/health","version":"/api/v1/version","simulations":"/api/v1/simulations"}}`.
+
 **GET `/health`** — liveness/readiness. Auth: none. Response 200: `{"status":"ok","engine":"idle|running","version":"0.1.0","simulated":true}`. Errors: 500. No pagination.
 Example: `curl :4000/api/v1/health` → above.
 
-**GET `/version`** — build + schema versions. Auth: read (token required when configured). Response 200: `{"apiVersion":1,"engineVersion":"0.1.0","eventSchemaVersion":1,"rulesetVersion":1,"promptPackVersion":1}`.
+**GET `/version`** — build + schema versions. Auth: read (token required when configured). Response 200: `{"apiVersion":1,"engineVersion":"0.1.0","eventSchemaVersion":1,"rulesetVersion":1,"promptPackVersion":1,"simulated":true}`.
 
 **Dashboard routes (outside `/api/v1`):** when `apps/web/dist/` exists, `GET /`, `GET /simulations/{simId}`, and exact built asset paths are served publicly by Fastify. During `pnpm dev`, Vite serves the same SPA at `http://127.0.0.1:5173` and proxies `/api` to port 4000.
 
@@ -49,7 +52,7 @@ Errors: 400 `VALIDATION_FAILED` (unknown worldSpec, bad budgets). No pagination.
 **GET `/simulations`** — list simulations. Auth: read. Query: `limit,cursor,status?`. Response 200: page of `{id,name,status,latestRun:{id,status,currentTick},createdAt}` ordered by `createdAt desc, id desc`.
 Example: `GET /simulations?limit=2` → `{"items":[{"id":"sim_000002",…},{"id":"sim_000001",…}],"nextCursor":null,"meta":{…}}`.
 
-**GET `/simulations/{simId}`** — detail incl. runs. Response 200: `{simulation, runs:[{id,seed,status,currentTick,spend:{inputTokens,outputTokens,costCentsEstimate}}]}`. Errors: 404.
+**GET `/simulations/{simId}`** — detail incl. runs. Response 200: `{simulation, runs:[{id,seed,status,currentTick,spend:{inputTokens,cachedInputTokens,outputTokens,costCentsEstimate}}]}`. Errors: 404.
 
 **POST `/simulations/{simId}/start`** · **`/pause`** · **`/resume`** · **`/stop`** — lifecycle controls for the active run (or `{"runId":"…"}` in body). Auth: admin. Request: `{"runId?":"run_000001"}`.
 Response 202: `{"run":{"id":"…","status":"running|paused|stopped","currentTick":N},"commandEventId":"evt_…"}` — every control is journaled (`admin.command.received`) before taking effect.
@@ -63,13 +66,17 @@ Errors: 409 if running; 400 range.
 **GET `/simulations/{simId}/status`** — live status (poll target). Response 200:
 ```json
 { "run": {"id":"run_000001","status":"running","currentTick":118,"simDate":"Y0001-M04-D28","endTick":360},
-  "tickRate": {"ticksPerSec": 0.4}, "llm": {"mode":"live","spend":{"inputTokens":182003,"outputTokens":54012,"costCentsEstimate":"163"},"budgetPct":33,"cacheHitRate":0.41,"enabled":true,"effectiveTier":3,"autoPaused":false,"frozenModules":[],"limits":{"runCostCentsMax":"500","perAgentDailyTokens":2000}},
-  "errors": {"last24Ticks": 2}, "meta": {…} }
+  "tickRate": {"ticksPerSec": 0.4}, "llm": {"mode":"live","spend":{"inputTokens":182003,"cachedInputTokens":64000,"outputTokens":54012,"costCentsEstimate":"163"},"budgetPct":33,"cacheHitRate":0.41,"enabled":true,"effectiveTier":3,"autoPaused":false,"frozenModules":[],"limits":{"runCostCentsMax":"500","perAgentDailyTokens":2000}},
+  "errors": {"last24Ticks": 2},
+  "activity": {"committedEvents":4802,"latestEventSeq":4801,"latestDigest":{"v":1,"tick":118,"simDate":"Y0001-M04-D28","indicators":{},"counts":{"events":28,"transactions":5,"decisions":3,"llmCalls":2,"rejectedIntents":0},"notable":[],"spend":{"budgetPct":33}}},
+  "task": null, "meta": {…} }
 ```
 
-**GET `/simulations/{simId}/scenario`** — current scenario config + mutation history. Response 200: `{scenario, history:[{changedAt,tick,patch,commandEventId}]}`.
+`activity` is a durable SQLite projection, not transient SSE state. `latestEventSeq` is the resume boundary for the first stream connection, and `latestDigest` remains available after a run is completed, stopped, or failed.
 
-**PATCH `/simulations/{simId}/scenario`** — edit scenario (only while `created`/`paused`). Auth: admin. Request: JSON-merge-patch of the scenario subset marked mutable (budgets, endTick, policyOverrides, llm routing). Response 200: updated scenario + journal event ID. Errors: 409 while running; 400 invalid keys/ranges (FR-EVT-2).
+**Planned — GET `/simulations/{simId}/scenario`** — proposed current scenario config + mutation history. This route is not registered today; immutable creation config is available from `GET /simulations/{simId}`.
+
+**Planned — PATCH `/simulations/{simId}/scenario`** — proposed paused-run mutation contract. This route is not registered today; use the implemented lifecycle, LLM-control, and bounded world-event commands instead.
 
 **POST `/simulations/{simId}/world-events`** — inject an approved world event. Auth: admin. Request: `{"type":"energy.fuel_price_shock","params":{"deltaPct":30},"scheduleTick?":130}` (immediate = next tick boundary).
 Response 202: `{"worldEvent":{"id":"wev_000003","type":"energy.fuel_price_shock","params":{"deltaPct":30},"source":"admin","status":"scheduled","createdTick":129,"scheduledTick":130,"appliedTick":null,"taskId":"task_000003","commandEventId":"evt_…","injectedEventId":"evt_…","appliedEventId":null,"effectEventIds":[],"catalogVersion":1},"commandEventId":"evt_…"}`.
@@ -79,7 +86,7 @@ Errors: 400 unknown type/params, nonfuture/out-of-run schedule, or extra fields;
 
 Approved v1 request variants are: `energy.fuel_price_shock {deltaPct}`, `row.reference_price_shift {sku,deltaPct}`, `market.demand_shock {sku,deltaPct,durationTicks}`, and `business.disaster {companyId,capacityReductionPct,durationTicks}`. No arbitrary function/tool/connector payload is accepted.
 
-**GET `/simulations/{simId}/llm-calls`** — immutable per-call telemetry. Query: `runId?,limit,cursor,agentId?,moduleId?,status?=success|fallback,fromTick?,toTick?`. Response 200: `{items:[{id,decisionId,agent,tick,moduleId,purpose,requestedTier,effectiveTier,provider,model,promptPackKey,promptVersion,promptHash,schemaKey,schemaVersion,requestHash,status,fallbackReason,providerErrorCode,detail,cached,attempts,inputTokens,outputTokens,latencyMs,costMicrocents,costCentsEstimate,sourceEventId}],nextCursor,totals:{calls,success,fallback,cacheHits,providerAttempts,inputTokens,outputTokens,costMicrocents},meta}` ordered `(tick desc,id desc)`. Cost is exact integer microcents; the per-item whole-cent estimate rounds up. Latency is operational telemetry from an injected monotonic clock: SQLite snapshots preserve it, but logical state hashes and replay decisions exclude it. (FR-OBS-5)
+**GET `/simulations/{simId}/llm-calls`** — immutable per-call telemetry. Query: `runId?,limit,cursor,agentId?,moduleId?,status?=success|fallback,fromTick?,toTick?`. Response 200: `{items:[{id,decisionId,agent,tick,moduleId,purpose,requestedTier,effectiveTier,provider,model,promptPackKey,promptVersion,promptHash,schemaKey,schemaVersion,requestHash,status,fallbackReason,providerErrorCode,detail,cached,attempts,inputTokens,cachedInputTokens,outputTokens,latencyMs,costMicrocents,costCentsEstimate,sourceEventId}],nextCursor,totals:{calls,success,fallback,cacheHits,providerAttempts,inputTokens,cachedInputTokens,outputTokens,costMicrocents},meta}` ordered `(tick desc,id desc)`. Cost is exact integer microcents; the per-item whole-cent estimate rounds up. Latency is operational telemetry from an injected monotonic clock: SQLite snapshots preserve it, but logical state hashes and replay decisions exclude it. (FR-OBS-5)
 
 **GET `/simulations/{simId}/errors`** — errors, rejected intents and LLM failures. Query: `runId?,limit,cursor,kind?=engine|intent_rejected|llm|schema`. Response 200: `{items:[{eventId,seq,at,tick,kind,code,message,actor,agent,correlationId,causationId}],nextCursor,summary:{counts:{engine,intentRejected,llm,schema},perAgent:[{agent,failures}],activeQuarantines:[{agent,quarantine}]},meta}` ordered `seq desc`. Provider failures are distinct from schema/validation failures; the correlation and causation IDs link every item back to the committed journal. Summary counts cover the complete run even when the item page is filtered. (FR-ADM-3)
 
@@ -135,7 +142,7 @@ The directory, profile, relationship, and decision endpoints are implemented in 
 **GET `/simulations/{simId}/companies/{companyId}`** — detail:
 ```json
 { "company": {"id":"co_00000007","name":"Fogline Coffee","sector":"food_service","status":"active","formationStage":"active","foundedTick":20,"registeredTick":22,"activatedTick":25,"incorporationContractId":"ctr_00000018","businessAccountId":"acct_0000003c","failureReason":null,"founder":{"id":"agt_00000031","name":"Dana Voss"}},
-  "capTable": [{"holder":{"id":"agt_00000031","name":"Dana Voss"},"shares":"10000","ownershipBp":10000}],
+  "capTable": [{"holder":{"kind":"agent","id":"agt_00000031","name":"Dana Voss"},"shares":"10000","ownershipBp":10000}],
   "staff": [{"employmentId":"emp_00000019","agent":{"id":"agt_00000040","name":"Jo Reed"},"title":"Barista","annualWageCents":"3200000","status":"active","startTick":28,"endTick":null,"legalContractId":"ctr_00000022"}],
   "offerings": [{"id":"off_00000001","sku":"meals","postedPriceCents":"1250","unitCostCents":"780","inventory":12,"active":true,"createdTick":29}],
   "jobs": [{"id":"job_00000001","title":"Barista","status":"filled","annualWageCents":"3200000","openings":1,"filledCount":1}],
@@ -168,9 +175,21 @@ For `why.kind=opening_seed`, the response contains only stored seasoned-month/mi
 
 ### 2.7 Investments & contracts
 
-**GET `/simulations/{simId}/investment-proposals`** [V1] — Query: `status?,companyId?,vcId?`. Page of `{id,company:{id,name},vc:{id,name},askAmount,preMoneyValuation,status,negotiationConversationId}` ordered `id desc`.
+**GET `/simulations/{simId}/investment-proposals`** — Query: `runId?,limit,cursor,status?,companyId?`. Page items resolve `{id,company,founder,firm,fund,vcPartner,askAmountCents,preMoneyValuationCents,initialEquityBasisPoints,status,conversationId,finalTerms,proposedTick,expiresTick,investmentId,sourceEventId,lastTransitionEventId}` and are ordered `(proposedTick asc,id asc)` with a run-bound cursor.
 
-**GET `/simulations/{simId}/investments`** [V1] — page of `{id,company,investor,amount,sharesIssued,pricePerShare,completedTick,transactionId}`.
+**GET `/simulations/{simId}/investment-proposals/{proposalId}`** — proposal item plus `{conversation,termsDiff,decision,timeline}`. The conversation is a bounded summary, `termsDiff` compares exact initial/final cents and basis points, and `decision` exposes rejection/validation and causal event evidence. Errors: 404.
+
+**GET `/simulations/{simId}/investments`** — Query: `runId?,limit,cursor,companyId?,fundId?`. Page items contain `{id,proposalId,company,firm,investor,amountCents,preMoneyValuationCents,sharesIssued,totalSharesBefore,totalSharesAfter,pricePerShareCents,ownershipBasisPoints,completedTick,sourceEventId}` ordered `(completedTick asc,id asc)`.
+
+**GET `/simulations/{simId}/investments/{investmentId}`** — exact investment item plus its proposal, pre/post cap-table snapshots, later distributions, completion why-record, and causal proposal timeline. The why-record contains the source/causation/evidence event IDs and exact contract, domestic transfer, optional capital call, and ownership-stake IDs. Errors: 404 or 409 if stored causal evidence is inconsistent.
+
+**GET `/simulations/{simId}/companies/{companyId}/cap-table`** — current generalized ownership projection: `{capTable:{company,totalShares,stakes:[{id,holder:{kind:"agent"|"venture_fund",id,name},shares,ownershipBasisPoints,acquiredVia,sinceTick}]},meta}`. Stake shares must sum exactly to `totalShares`.
+
+**GET `/simulations/{simId}/investment-distributions`** — Query: `runId?,limit,cursor,companyId?`. Page of `{id,company,amountCents,totalShares,referenceId,distributedTick,transactionId,allocationCount,requestEventId,sourceEventId}` ordered `(distributedTick asc,id asc)`.
+
+**GET `/simulations/{simId}/investment-distributions/{distributionId}`** — immutable distribution plus `companyAccountId` and ordered beneficial-owner allocations `{allocationIndex,holder,shares,amountCents,accountId,ownershipBasisPoints}`. Errors: 404.
+
+All investment reads are read-only joins over WS-801 through WS-804 authority; they add no migration or state-hash surface. The React Investment Explorer remains the unfinished half of WS-805, so Phase 8 is not closed yet.
 
 **GET `/simulations/{simId}/contracts`** — Query: `type?,party?,status?`. Page of `{id,type,parties:[{id,role,signedTick}],status,effectiveTick,fee?}` ordered `id desc`.
 
@@ -182,7 +201,7 @@ For `why.kind=opening_seed`, the response contains only stored seasoned-month/mi
 
 **GET `/simulations/{simId}/news/{storyId}`** — published story detail: `{story:{id,tick,sourceTick,headline,body,topic,stance,reach,entities,author,org,citedEventIds,decisionId,llmCallId?,sourceEventId},citedEvents:[{eventId,eventFactHash,eventType,tick,simDate,actor,correlationId,causationId?,payload}],sentimentImpact:[{topic,delta,stanceDelta,outcomeDelta,sourceEventId}],meta}`. Citation identity and order exactly match the story; every sentiment delta reconciles to its bounded components. Spiked or missing stories return 404.
 
-**GET `/simulations/{simId}/policies`** — current + history. Response 200: `{current:{"income_tax_rate_bp":1800,…}, history:[{key,value,previousValue,effectiveTick,source,causeEventId}]}` (history paginated via `limit,cursor`).
+**Planned — GET `/simulations/{simId}/policies`** — proposed current + history projection. Dynamic policy reads arrive with WS-1004; this route is not registered today.
 
 **GET `/simulations/{simId}/indicators`** — persisted economic time series. Query: `series=gdpProxy,cpi,m1,averageWage,unemploymentRate,creditOutstanding,defaultRate,businessCount,treasuryBalance,sentimentIndex&fromTick=0&toTick=360&step?=1&max?=5000`. The ten supported v1 names are `gdpProxy`, `cpi`, `m1`, `averageWage`, `unemploymentRate`, `creditOutstanding`, `defaultRate`, `businessCount`, `treasuryBalance`, and `sentimentIndex`. `creditOutstanding` is gross stored contractual principal across opening and originated loans, including defaulted obligations until legally resolved. `defaultRate` is recorded defaults divided by all stored loans and rounded deterministically to basis points. Cent-valued points use integer strings; basis-point, index, and count values use safe integers. Exact formulas are versioned and documented in [WS-704](WS_704_FULL_INDICATORS.md). Response 200:
 ```json
@@ -192,11 +211,11 @@ For `why.kind=opening_seed`, the response contains only stored seasoned-month/mi
 ```
 Errors: 400 unknown series. Not cursor-paginated (bounded by tick range; max 10 series and 5,000 total points/request).
 
-**GET `/simulations/{simId}/markets`** [V1] — list markets + securities: page of `{marketId,kind,securities:[{id,symbol,company,lastPrice,lastAuctionTick}]}`.
+**Planned — GET `/simulations/{simId}/markets`** — securities-market list scheduled for WS-905; this route is not registered today.
 
 **GET `/simulations/{simId}/markets/goods`** — authoritative Phase 4 posted-price market. Response 200: `{market:{id:"goods_riverbend",kind:"posted_price",tick,catalogVersion},products:[{product,currentRowReferencePriceCents,demandMultiplierBp,offerings:[{id,company,postedPriceCents,averageUnitCostCents,inventory,active}]}],recentPriceChanges:[{id,offeringId,companyId,sku,tick,oldPriceCents,newPriceCents,source,sourceEventId}],energy:{householdTariffCents,businessTariffCents,fuelPriceCents}|null,meta}`.
 
-**GET `/simulations/{simId}/markets/{marketId}/prices`** — price history. Query: `securityId|sku, fromTick,toTick`. Response 200: `{"points":[{"tick":91,"price":"1250","volume":120,"source":"auction"}]}`. (Goods price history uses the same shape with `sku`.)
+**Planned — GET `/simulations/{simId}/markets/{marketId}/prices`** — securities price-history contract scheduled for WS-905. Current goods price changes are included in the implemented `/markets/goods` response.
 
 **GET `/simulations/{simId}/transactions`** — ledger explorer. Query: `limit,cursor,accountId?,kind?,fromTick?,toTick?,correlationId?`. Page of
 `{id,tick,kind,legs:[{accountId,owner:{kind,id,name},direction,amount}],reason,actor,sourceEventId,correlationId}` ordered `seq desc`. *Guaranteed: every item's legs balance.*
@@ -205,12 +224,12 @@ Errors: 400 unknown series. Not cursor-paginated (bounded by tick range; max 10 
 
 ### 2.9 Runs, replay, comparison, export
 
-**GET `/simulations/{simId}/runs`** — list runs: page of `{id,seed,status,currentTick,startedAt,endedAt,manifestDigest}`.
+**Planned — GET `/simulations/{simId}/runs`** — proposed standalone run list. Today `GET /simulations/{simId}` returns the simulation's runs directly.
 
 **POST `/simulations/{simId}/runs/{runId}/replay`** — start a replay run from the journal + LLM cache. Auth: admin. Request: `{"toTick?":200,"mode":"strict"}` (`strict` = fail on divergence; `observe` = record divergence and continue with cached-else-fallback).
 Response 202: `{"replayRun":{"id":"run_000004","replayOf":"run_000001","sourceSimulationId":"sim_000001","mode":"strict","toTick":200,"status":"running","currentTick":0,"lastComparedSeq":1,"divergenceCount":0,"firstDivergence":null,"sourceStateHash":null,"replayStateHash":null,"cacheArtifactDigest":"…","journalDigest":"…","startedWall":"…","completedWall":null,"errorCode":null,"errorMessage":null}}`. Poll `GET /simulations/{simId}/status?runId=run_000004`; its optional `replay` field has the same shape. Terminal status is `completed`, `diverged`, or `failed`. Divergence kinds are `cache_incomplete`, `event_mismatch`, `state_hash_mismatch`, and `unsupported_journal_command`. Replay is cache-only and never calls a live provider. Errors: 400 target tick beyond source or malformed request; 404 source/run; 409 source not terminal, incompatible manifest pins, or mutated source artifact.
 
-**GET `/runs/compare?base=run_000001&candidate=run_000002&series=cpi,unemploymentRate`** [V1] — aligned series + divergence: Response 200: `{"base":{…}, "candidate":{…}, "series":[{name, basePoints, candidatePoints}], "firstDivergence":{"tick":48,"stateHashBase":"…","stateHashCandidate":"…"},"eventCountDiffs":[{"type":"loan.approved","base":9,"candidate":6}]}`. Errors: 400 different scenarios (comparable = same worldSpec version).
+**Planned — GET `/runs/compare?base=run_000001&candidate=run_000002&series=cpi,unemploymentRate`** — aligned series and divergence contract scheduled for WS-1104; this route is not registered today.
 
 **POST `/simulations/{simId}/exports`** — async export. Auth: admin. Request: `{"runId":"run_000001","datasets":["events","transactions","indicators"],"format":"jsonl"}` (`jsonl|csv`).
 Response 202 returns the schema-v1 job: `{"export":{"id":"xpt_0000000100000001","simulationId":"sim_00000001","runId":"run_00000001","format":"jsonl","datasets":["events","transactions","indicators"],"status":"queued","sourceTick":360,"sourceStateHash":"…","disclaimer":"Simulated scenario data - not a prediction and not financial, legal, or political advice.","files":[],"manifest":null,"auditEvents":[…],"createdWall":"…","startedWall":null,"completedWall":null,"errorCode":null,"errorMessage":null}}`. The source cannot be running or have an active advance/replay operation. Creation pins the exact source tick and logical state hash.
@@ -231,7 +250,7 @@ Response 202 returns the schema-v1 job: `{"export":{"id":"xpt_0000000100000001",
 
 ### 3.2 SSE endpoint
 
-**GET `/simulations/{simId}/stream?topics=digest,lifecycle&runId?=…`** — `text/event-stream`. Auth: read. The v0 server accepts only `digest` and `lifecycle`. The browser uses a `fetch`/`ReadableStream` client so it can attach both `Authorization` and `Last-Event-ID`; every delivered frame is validated by the shared discriminated-union schema.
+**GET `/simulations/{simId}/stream?topics=digest,lifecycle&runId?=…`** — `text/event-stream`. Auth: read. The v0 server accepts only `digest` and `lifecycle`. The browser uses a `fetch`/`ReadableStream` client so it can attach both `Authorization` and `Last-Event-ID`; every delivered frame is validated by the shared discriminated-union schema. The server writes `:connected` immediately after establishing the response so a proxy does not wait for the first event or heartbeat; the comment has no event ID and is ignored by the frame parser.
 
 Frame format: `id:` = event `seq`; `event:` = topic; `data:` = JSON payload.
 
@@ -243,7 +262,7 @@ Frame format: `id:` = event `seq`; `event:` = topic; `data:` = JSON payload.
 ```
 **Topic `lifecycle`:** `{v,eventId,type,simulationId,runId,status,tick,simDate,wallTime,correlationId,causationId?}` for committed lifecycle facts.
 
-Heartbeat: comment frame `:hb` every 15s by default. Backpressure: when raw backlog exceeds `WORLDTANGLE_SSE_MAX_BACKLOG_EVENTS`, the client receives `event: gap` with `{fromSeq,toSeq}` and refreshes status, detail, simulation-list, and event-ledger REST queries. Normal reconnects resume from the last delivered sequence with bounded exponential retry; a 401 enters `auth-required` state without retrying. Future owning modules add `news`, `errors`, `market`, and `policy` topics.
+Heartbeat: comment frame `:hb` every 15s by default. Backpressure: when raw backlog exceeds `WORLDTANGLE_SSE_MAX_BACKLOG_EVENTS`, the client receives `event: gap` with `{fromSeq,toSeq}` and refreshes status, detail, simulation-list, and event-ledger REST queries. The first connection resumes from durable `status.activity.latestEventSeq`; later reconnects resume from the last delivered sequence with bounded exponential retry. Terminal runs disable the live stream and render the durable status digest. A 401 enters `auth-required` state without retrying. Future owning modules may add `news`, `errors`, `market`, and `policy` topics.
 
 ## 4. Event envelope & catalog
 
@@ -319,10 +338,15 @@ Rules: payloads are validated at append time; money as string-cents; **no free t
 | `loan.payment.missed` | complete arrears cannot be funded | `{loanId,installmentId,installmentNumber,requiredCents,availableCents,consecutiveMisses,defaultThreshold,missedInstallmentIds,evidence}` |
 | `loan.defaulted` | 3rd consecutive miss | `{defaultId,loanId,borrowerKind,borrowerId,bankId,defaultTick,outstandingPrincipalCents,consecutiveMisses,missedInstallmentIds,writeDownTransactionId,lossAccountId,creditScoreBefore,creditScorePenaltyPoints,creditScoreAfter,evidence}` |
 | `agent.credit_score.penalized` | a personal-loan default applies the bounded persisted penalty | `{agentId,loanId,defaultId,scoreBefore,penaltyPoints,scoreAfter,floor,evidence}` |
+| `venture.firm.created` [V1] | Riverbend VC firm seeded | `{firmId,name,status,evidence}` |
+| `venture.fund.created` [V1] | immutable fund opened | `{fundId,firmId,name,fundSizeCents,bankAccountId,evidence}` |
+| `venture.fund.deployed` [V1] | capital commitment advances | `{deploymentId,fundId,targetCompanyId,referenceId,amountCents,deployedBeforeCents,deployedAfterCents,remainingCents,evidence}` |
 | `investment.proposed` [V1] | bounded pitch accepted for negotiation | `{proposalId,companyId,founderAgentId,firmId,fundId,vcPartnerAgentId,askAmountCents,preMoneyValuationCents,equityBasisPoints,proposedTick,expiresTick,evidence}` |
 | `investment.proposal.agreed` [V1] | bounded terms accepted, awaiting atomic close | `{proposalId,companyId,negotiationConversationId,finalTerms:{kind,referenceId,amountCents,preMoneyValuationCents,equityBasisPoints},evidence}` |
-| `investment.completed` [V1] | closed | `{investmentId, proposalId, amount, sharesIssued, pricePerShare, capTableAfter}` |
+| `investment.completed` [V1] | exact priced round closes atomically | `{investmentId,proposalId,companyId,investorId,firmId,amountCents,preMoneyValuationCents,sharesIssued,pricePerShareCents,transactionId,capitalCallTransactionId,contractId,ownershipStakeId,completedTick,capTableBefore,capTableAfter,evidence}` |
 | `investment.rejected` [V1] | negotiation failed or expired | `{proposalId,companyId,negotiationConversationId,reason,status:rejected|expired,evidence}` |
+| `investment.distribution.requested` [V1] | exact owner allocation accepted | `{distributionId,companyId,amountCents,totalShares,referenceId,allocations,evidence}` |
+| `investment.distribution.completed` [V1] | dividend transaction and allocation journal commit | `{distributionId,companyId,amountCents,totalShares,companyAccountId,transactionId,referenceId,distributedTick,allocations,requestEventId,evidence}` |
 | `contract.drafted` | law firm output | `{contractId, type, parties, fee, drafterId}` |
 | `contract.signed` | all parties signed | `{contractId, type, effectiveTick}` |
 | `contract.terminated` | ended | `{contractId, reason, byPartyId?}` |

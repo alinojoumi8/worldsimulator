@@ -64,4 +64,4 @@ The complete `pnpm gate:mvp` run passed in 687 seconds: 127 Vitest files and
 Chromium path passed in 30 seconds.
 
 The MVP boundary does not include VC, securities, dynamic government, external
-accounts, citizen tools, or connector dependencies. V1 work begins at WS-801.
+accounts, citizen tools, or connector dependencies. V1 subsequently began at WS-801; current progress is tracked in [PROJECT_STATUS](PROJECT_STATUS.md).

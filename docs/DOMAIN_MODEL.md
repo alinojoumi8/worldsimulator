@@ -68,7 +68,7 @@ erDiagram
     Job ||--o| EmploymentContract : "filled by"
     EmploymentContract }o--|| Agent : employee
     Company ||--o{ OwnershipStake : "cap table"
-    OwnershipStake }o--|| Agent : holder
+    OwnershipStake }o--o| Agent : "agent holder"
     Bank ||--o{ BankAccount : holds
     BankAccount }o--|| Agent : "owned by (or Company)"
     Agent ||--o{ LoanApplication : submits
@@ -76,9 +76,12 @@ erDiagram
     Loan ||--o{ Payment : "installments"
     Payment ||--|| Transaction : "settled by"
     Transaction }o--|| BankAccount : "debits/credits (legs)"
-    VentureCapitalFirm ||--o{ InvestmentProposal : evaluates
+    VentureCapitalFirm ||--o{ VentureFund : owns
+    VentureFund ||--o{ VentureFundDeployment : deploys
+    VentureFund ||--o{ InvestmentProposal : funds
     InvestmentProposal ||--o| Investment : "closed as"
     Investment ||--|| OwnershipStake : creates
+    OwnershipStake }o--o| VentureFund : "fund holder"
     Company ||--o{ InvestmentDistribution : declares
     InvestmentDistribution ||--|| Transaction : "paid by"
     LegalContract }o--o{ Agent : parties
@@ -331,28 +334,34 @@ Any `Company` or `Institution` that may post Jobs. Implemented as a capability f
 
 ### 3.6 Investment & VC (owner: M10) [V1]
 
-#### VentureCapitalFirm `vc_`
-- **Fields:** `id`, `runId`, `name`, `fundSize`, `deployed`, `thesis` (sector prefs), `partnerAgentIds`.
-- **Validation:** deployed ≤ fundSize; investments only from fund account.
+#### VentureCapitalFirm `inst_`
+- **Fields:** `id`, `runId`, `name`, `status` (`active|closed`), `createdTick`, `sourceEventId`. Riverbend partner authority is resolved from employed institution roles rather than copied into the firm row.
+- **Validation:** run-scoped institution identity; immutable creation fact; only authorized active partners may negotiate for the firm.
+- **Owner:** M10.
+
+#### VentureFund `vfund_` and VentureFundDeployment `vdep_`
+- **Fund fields:** `id`, `runId`, `firmId`, dedicated `bankAccountId`, `name`, `fundSizeCents`, `deployedCents`, `status` (`open|fully_deployed|closed`), `createdTick`, `sourceEventId`.
+- **Deployment fields:** `id`, `runId`, `fundId`, `targetCompanyId`, `referenceId`, `amountCents`, `deployedBeforeCents`, `deployedAfterCents`, `deployedTick`, `sourceEventId`.
+- **Validation:** all cents are canonical signed-64-bit integer text; `0 ≤ deployedCents ≤ fundSizeCents`; deployment rows form an immutable exact-addition chain; exact exhaustion sets `fully_deployed`; investment cash moves only through the fund's dedicated account.
 - **Owner:** M10.
 
 #### InvestmentProposal `prop_`
 - **Purpose:** A pitch + negotiation record.
-- **Fields:** `id`, `runId`, `companyId`, `founderAgentId`, `vcId`, `askAmount`, `preMoneyValuation`, `negotiationConversationId`, `finalTerms? {amount, preMoney, equityBp}`, `status`.
+- **Fields:** `id`, `runId`, `companyId`, `founderAgentId`, `firmId`, `fundId`, `vcPartnerAgentId`, `askAmountCents`, `preMoneyValuationCents`, `initialEquityBasisPoints`, `status`, nullable `negotiationConversationId`, nullable exact `finalTerms`, `proposedTick`, `expiresTick`, `sourceEventId`, `lastTransitionEventId`.
 - **States:** `proposed → negotiating → agreed → completed | rejected | expired`.
-- **Validation:** terms math consistent: equityBp = amount / (preMoney + amount) within rounding tolerance of 1 bp; expiry after N ticks without progress.
+- **Validation:** founder and partner are distinct and authorized; the open fund can cover the bounded ask; `expiresTick > proposedTick`; terms recompute `round(amount × 10,000 / (preMoney + amount))` within one basis point; terminal transitions preserve exact causal evidence.
 - **Owner:** M10.
 
 #### Investment `inv_`
 - **Purpose:** A closed financing: money in, shares issued.
-- **Fields:** `id`, `proposalId`, `companyId`, `investorId`, `amount`, `sharesIssued`, `pricePerShare`, `transactionId`, `completedTick`.
-- **Validation:** atomic with cap-table update + transaction (INV-4 preserved); creates OwnershipStake.
+- **Fields:** `id`, `runId`, `proposalId`, `companyId`, `investorId` (venture fund), `firmId`, `amountCents`, `preMoneyValuationCents`, `sharesIssued`, `totalSharesBefore`, `totalSharesAfter`, `pricePerShareCents`, `transactionId`, nullable `capitalCallTransactionId`, `contractId`, `ownershipStakeId`, `completedTick`, `sourceEventId`.
+- **Validation:** exact integer price identities (`price × prior shares = pre-money`, `price × issued shares = amount`, `prior + issued = after`); one atomic contract, cash transfer, fund deployment, stake, cap-table revision, proposal transition, and completion event; INV-4 remains exact.
 - **Owner:** M10.
 
 #### OwnershipStake `stk_`
 - **Purpose:** Cap-table entry (also used for founder equity from day 1 — MVP).
-- **Fields:** `id`, `companyId`, `holderId` (agent|vc), `shares` (integer), `acquiredVia` (`founding|investment|trade`), `sinceTick`.
-- **Validation:** Σ shares per company = company.totalShares exactly (INV-4); shares > 0; transfers atomic.
+- **Fields:** `id`, `runId`, `companyId`, `holderKind` (`agent|venture_fund`), `holderId`, `shares` (positive integer text), `acquiredVia` (`founding|investment|trade`), `sinceTick`, nullable `sourceEventId`.
+- **Validation:** Σ shares per company equals the authoritative cap-table total exactly (INV-4); founding stakes belong to agents; investment stakes belong to venture funds; transfers/issuances are atomic.
 - **Owner:** M10 (M08 writes the founding stake at creation via M10's interface).
 
 #### InvestmentDistribution `dist_`
@@ -655,7 +664,7 @@ stateDiagram-v2
 | M07 | Job, EmploymentContract, Agent.employmentStatus | payroll postings (requests M09) |
 | M08 | Company, Inventory, offerings/prices, CompanyDepartment | cap table (via M10), transactions |
 | M09 | Bank, BankAccount, **Transaction**, LoanApplication, Loan, Payment | non-financial state |
-| M10 | VC firm, InvestmentProposal, Investment, OwnershipStake | company operations |
+| M10 | VC firm/fund/deployment, InvestmentProposal, Investment, OwnershipStake, InvestmentDistribution | company operations |
 | M11 | LegalContract | the hot-path copies (M07/M09 own theirs) |
 | M12 | Product catalog, goods Orders, goods PriceHistory | inventory (M08), money (M09) |
 | M13 | Market, Security, StockOrder, Trade, securities PriceHistory | cash/share settlement postings (requests M09/M10) |

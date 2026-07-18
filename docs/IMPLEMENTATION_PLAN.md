@@ -22,7 +22,7 @@ Key structural rules (enforced by package boundaries, lint, and review):
 4. **LLM at the edge.** M21 is the only module that talks to a provider. It returns *proposals* which M04 turns into intents. Proposals that fail validation simply never become state.
 5. **Money is sacred.** Only M09 writes `Transaction` rows; every other module requests postings via its interface. All amounts integer cents (`bigint`), all rates fixed-point bp (ADR-0013).
 
-**Module = folder with a public `index.ts`.** Cross-module imports of anything but `index.ts` are lint errors. This keeps later extraction (worker threads per region, or services) mechanical (ADR-0002).
+The M01–M26 names below are logical ownership boundaries. The current modular monolith implements many of them as package-local files and persistence adapters rather than one folder per module; package consumers use the public `src/index.ts` exports, while server wiring may compose package-local adapters directly. The ownership and dependency rules remain the architectural contract (ADR-0002).
 
 ---
 
@@ -133,10 +133,10 @@ Format per module — **Responsibility · Owns · Must NOT own · Interface · I
 
 ### M10 — Venture Capital & Investment [V1]
 - **Responsibility:** VC firms/funds, pitch→negotiation→closing pipeline, cap tables (incl. founder equity from MVP day 1), dividends/exits.
-- **Owns:** VentureCapitalFirm, InvestmentProposal, Investment, OwnershipStake.
+- **Owns:** VentureCapitalFirm, VentureFund, VentureFundDeployment, InvestmentProposal, Investment, OwnershipStake, InvestmentDistribution.
 - **Must NOT own:** negotiation transport (M05), company ops.
 - **Interface:** `recordFoundingEquity(companyId, founder, shares)` (MVP), `propose(intent)`, `close(proposalId, finalTerms)`, `distribute(companyId, amount)` (pro-rata largest-remainder).
-- **Publishes:** `investment.proposed/completed/rejected`. **Consumes:** conversation outcomes (M05), company events.
+- **Publishes:** `venture.firm.created`, `venture.fund.created/deployed`, `investment.proposed/proposal.agreed/completed/rejected`, and `investment.distribution.requested/completed`. **Consumes:** conversation outcomes (M05), company events.
 - **Deps:** M05, M08, M09, M11.
 - **Failure behavior:** terms failing cap-table math → proposal rejected with validation detail; closing is atomic (txn + shares + contract) or nothing.
 - **Testing:** cap-table property tests (INV-4, Σ=100%); dilution math golden tests; allocation exactness.
@@ -264,7 +264,7 @@ Format per module — **Responsibility · Owns · Must NOT own · Interface · I
 - **MVP:** MiniMax M3 Tier 2 + Kimi K2.x Tier 3 + Mock, cache, exact cached-token-aware budgets and pinned routing. **Later:** batch-API scheduling and embedding models (for M03). Anthropic remains a legacy adapter, not the default route.
 
 ### M22 — Backend API Layer
-- **Responsibility:** REST /api/v1 (Fastify + Zod), SSE stream, RFC 9457 errors, cursor pagination, auth hook (bearer optional), OpenAPI generation, contract enforcement.
+- **Responsibility:** REST `/api/v1` (Fastify + Zod), SSE stream, RFC 9457 errors, cursor pagination, optional bearer-auth hook, and contract enforcement. HTTP JSON Schema/OpenAPI publication remains planned and is not a registered route.
 - **Owns:** HTTP schemas/DTOs (versioned), SSE digest assembly.
 - **Must NOT own:** business logic — thin adapters over module interfaces; no direct DB access except read models exposed by M20/M25.
 - **Interface:** [API_CONTRACTS.md](API_CONTRACTS.md) is the contract.
@@ -276,7 +276,7 @@ Format per module — **Responsibility · Owns · Must NOT own · Interface · I
 
 ### M23 — Frontend Application
 - **Responsibility:** React 19 + Vite dashboard (PRD §19): controls, directory/profile, company/bank/loan/news/event views, explainability panels, disclaimers.
-- **Owns:** UI state, SSE client, API client (generated from schemas).
+- **Owns:** UI state, fetch-stream SSE client, and a typed API client that runtime-parses responses with the shared schemas.
 - **Must NOT own:** any computation of record — displays what the API explains; no client-side economics.
 - **Interface:** consumes API_CONTRACTS only (no engine imports).
 - **Deps:** M22.
@@ -285,10 +285,10 @@ Format per module — **Responsibility · Owns · Must NOT own · Interface · I
 - **MVP:** UI-1..UI-7. **Later:** UI-8 set (network graph, comparisons, scenario editor).
 
 ### M24 — Simulation Administration Tools
-- **Responsibility:** Admin surface: run manifest viewer, kill switches (LLM off/agent quarantine/module freeze), budget controls, world-event injector UI/API glue, prompt inspector, determinism self-check trigger.
+- **Responsibility:** Admin surface: run manifest viewer, kill switches (LLM off/agent quarantine/module freeze), budget/control status, and bounded world-event injector UI/API glue. A standalone determinism self-check endpoint is planned, not implemented.
 - **Owns:** admin command journal semantics (with M01), kill-switch state.
 - **Must NOT own:** the mechanisms (switches flip flags owned by M21/M04/M19).
-- **Interface:** admin endpoints in API_CONTRACTS §3.9; `selfCheck(runId)`.
+- **Interface:** implemented admin endpoints in API_CONTRACTS §2.2; a future `selfCheck(runId)` must remain read-only and journal any requested mutation.
 - **Publishes:** `admin.command.received`. **Consumes:** —.
 - **Deps:** M01, M04, M19, M21, M25.
 - **Failure behavior:** admin commands validated + journaled before effect; unknown commands rejected.
@@ -404,13 +404,13 @@ Rules: each phase ends **runnable + tests green**; no phase starts before its de
 - **Deps:** Phase 6. **Risks:** believability tuning absorbing unbounded time (timebox; ship envelopes).
 
 ### Phase 8 — Investments and venture capital [V1]
-- **Status (2026-07-16):** WS-801–804 complete; WS-805 API/UI and the Phase 8 acceptance gate are next.
+- **Status (2026-07-18):** WS-801–804 complete. WS-805's shared contracts, read projection, proposal/investment/cap-table/distribution REST routes, and generalized company cap-table holder contract are implemented on the active branch. The React explorer, component/browser evidence, and Phase 8 acceptance gate remain open.
 - **Goal:** FR-INV: pitch → Tier 3 negotiation → term validation → close → cap table.
 - **Modules:** M10, M05 (negotiation kinds), M11 (investment contracts).
-- **Backend:** WS-801 persists run-scoped VC firms, funds, and immutable deployment chains with exact integer-cent accounting and a hard `deployed <= fundSize` boundary. WS-802 adds deterministic founder pitch triggers, provider-neutral Tier-3 investment conversations, exact bounded terms, outcome revalidation, typed rejection, and expiry. WS-803 validates exact integer-share priced rounds and atomically closes the investment contract, ROW-backed fund draw, domestic cash transfer, deployment, immutable stake, cap-table revision, proposal, and completion event. WS-804 aggregates ownership by beneficial owner and posts exact largest-remainder dividends through one immutable domestic transaction and causal journal. **Frontend:** investment pages, cap tables, negotiation transcripts. **API:** investments, proposals, cap tables, distributions. **DB:** firms, funds, fund cash links, deployments, proposals, generalized cap tables and ownership stakes, investment contracts, completed investments, and immutable distributions are live.
-- **Tests:** INV-4 property suite; negotiation-outcome extraction; dilution goldens; arbitrary-weight allocation exactness, canonical tie-breaking, migration/reopen, rollback, and restore equivalence.
+- **Backend:** WS-801 persists run-scoped VC firms, funds, and immutable deployment chains with exact integer-cent accounting and a hard `deployed <= fundSize` boundary. WS-802 adds deterministic founder pitch triggers, provider-neutral Tier-3 investment conversations, exact bounded terms, outcome revalidation, typed rejection, and expiry. WS-803 validates exact integer-share priced rounds and atomically closes the investment contract, ROW-backed fund draw, domestic cash transfer, deployment, immutable stake, cap-table revision, proposal, and completion event. WS-804 aggregates ownership by beneficial owner and posts exact largest-remainder dividends through one immutable domestic transaction and causal journal. The current WS-805 backend slice exposes those records through strict, read-only proposal/investment/cap-table/distribution list and detail projections. **Frontend:** not yet implemented for WS-805; investment pages, cap tables, negotiation transcripts, and navigation remain. **API:** WS-805 reads are implemented; their React client is not. **DB:** firms, funds, fund cash links, deployments, proposals, generalized cap tables and ownership stakes, investment contracts, completed investments, and immutable distributions are live; WS-805 adds no table.
+- **Tests:** INV-4 property suite; negotiation-outcome extraction; dilution goldens; arbitrary-weight allocation exactness, canonical tie-breaking, migration/reopen, rollback, restore equivalence, shared read contracts, cursor/route validation, and generalized-holder schema coverage. Component and browser acceptance remain with the UI slice.
 - **Exit criteria:** default world closes ≥1 negotiated investment in 360 ticks; all math exact.
-- **Deps:** Phase 7. **Risks:** negotiation quality (routing to opus tier for these calls; transcripts reviewable).
+- **Deps:** Phase 7. **Risks:** negotiation quality (bounded provider-neutral Tier-3 routing; transcripts remain reviewable).
 
 ### Phase 9 — Simplified securities market [V1]
 - **Goal:** FR-SEC-1: listings + daily call auction + settlement + price history.

@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.0 — approved baseline for Phase 0–1 |
-| **Date** | 2026-07-14 |
+| **Status** | Approved v1.0 baseline — MVP accepted through WS-710; V1 active at WS-805 |
+| **Date** | 2026-07-18 |
 | **Owners** | Project owner + engineering |
-| **Related docs** | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · [API_CONTRACTS.md](API_CONTRACTS.md) · [DOMAIN_MODEL.md](DOMAIN_MODEL.md) · [INITIAL_WORLD.md](INITIAL_WORLD.md) · [TASK_BACKLOG.md](TASK_BACKLOG.md) · [adr/](adr/README.md) |
+| **Related docs** | [PROJECT_STATUS.md](PROJECT_STATUS.md) · [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · [API_CONTRACTS.md](API_CONTRACTS.md) · [DOMAIN_MODEL.md](DOMAIN_MODEL.md) · [INITIAL_WORLD.md](INITIAL_WORLD.md) · [TASK_BACKLOG.md](TASK_BACKLOG.md) · [adr/](adr/README.md) |
 
 **Priority tags used throughout:** `[MVP]` must exist in the first shippable milestone (Phases 1–7) · `[V1]` first post-MVP release (Phases 8–10) · `[LATER]` long-term idea, design for but do not build · `[NOT-YET]` explicitly must **not** be built until re-approved.
 
@@ -17,7 +17,7 @@ WorldTangle is a research-oriented economic and social world simulator. It model
 
 The system is a **hybrid**: a deterministic economic engine owns money, accounting, contracts, markets, and time; LLMs act only as bounded decision-makers that *propose* structured intents which the engine validates and applies. Every state change is recorded in an immutable audit log so that any outcome can be explained, replayed, and compared across runs.
 
-The MVP (Phases 1–7 of the [roadmap](IMPLEMENTATION_PLAN.md#phased-roadmap)) delivers one town, 25–100 agents, employment, payroll, personal banking, company formation, bank loans, simple contracts, conversations, generated news, a small set of economic indicators, and an observation dashboard — all runnable fully deterministically with a mock LLM provider.
+The MVP (Phases 1–7 of the [roadmap](IMPLEMENTATION_PLAN.md#3-phased-roadmap)) delivers one town, 25–100 agents, employment, payroll, personal banking, company formation, bank loans, simple contracts, conversations, generated news, a small set of economic indicators, and an observation dashboard — all runnable fully deterministically with a mock LLM provider.
 
 WorldTangle is a **simulation and research environment**. It must never present output as a prediction of any real economy, and the UI must label all results as simulated scenarios, not financial, legal, or political advice.
 
@@ -73,8 +73,8 @@ One **tick = one simulated day** (ADR-0005). Each tick executes a fixed, ordered
 
 1. **TickStart / Obligations** — due items fire: payroll (days 15/30), loan installments, contract expirations, scheduled tasks.
 2. **Perception & Triggers** — the engine computes which agents have a *reason to think* (new message, payday shortfall, job offer, news, goal actionable, policy change). Everyone else runs scripted routine only. No LLM calls happen for un-triggered agents.
-3. **Decisions** — triggered agents produce intents via the decision engine (rule tiers first, LLM tiers when warranted). LLM calls are issued concurrently, then **collected and ordered by agentId** before any application.
-4. **Intent validation & execution** — every intent is validated against permissions, funds, laws, and world state; approved intents are applied through the single `apply()` choke point; rejected intents are recorded with reasons.
+3. **Decisions** — triggered agents produce intents via the decision engine (rule tiers first, LLM tiers when warranted). Prepared opportunities use a stable domain order; provider calls currently issue sequentially before the authoritative tick and results enter the same deterministic apply barrier.
+4. **Intent validation & execution** — every intent is validated against permissions, funds, laws, and world state; approved intents pass through module-owned typed apply/persistence boundaries inside the tick unit of work; rejected intents are recorded with reasons.
 5. **Market clearing** — labor matches, goods purchases, (V1: securities auction) resolve deterministically.
 6. **Settlement & accounting** — all money movements post as balanced double-entry transactions.
 7. **News & sentiment** — journalists may write stories about notable events; sentiment indices update.
