@@ -2,14 +2,26 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { IndicatorSparkline, formatIndicatorValue, sparklinePoints } from "./indicator-sparkline";
+import {
+  IndicatorSparkline,
+  formatIndicatorValue,
+  sparklineBaselineY,
+  sparklinePoints,
+} from "./indicator-sparkline";
 
 describe("IndicatorSparkline", () => {
   afterEach(cleanup);
 
-  it("plots committed points in tick order and centers a constant series", () => {
+  it("plots nonnegative values against a truthful zero baseline", () => {
     expect(sparklinePoints([[3, "500"], [1, "500"], [2, "500"]]))
-      .toBe("8.00,56.00 160.00,56.00 312.00,56.00");
+      .toBe("8.00,8.00 160.00,8.00 312.00,8.00");
+    expect(sparklineBaselineY([[1, "500"], [2, "500"]])).toBe(104);
+  });
+
+  it("does not exaggerate a tiny change in a large balance", () => {
+    const geometry = sparklinePoints([[0, "14806238"], [360, "14831238"]]);
+    const yValues = geometry.split(" ").map((point) => Number(point.split(",")[1]));
+    expect(Math.abs((yValues[0] ?? 0) - (yValues[1] ?? 0))).toBeLessThan(1);
   });
 
   it("formats every indicator unit without losing large integer cents", () => {
@@ -43,6 +55,8 @@ describe("IndicatorSparkline", () => {
       />,
     );
     expect(screen.getByText("7.50%")).toBeTruthy();
+    expect(screen.getByText("Started 8.25%")).toBeTruthy();
+    expect(screen.getByText("Last change · tick 8")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Unemployment rate from tick 4 through tick 8" }))
       .toBeTruthy();
   });

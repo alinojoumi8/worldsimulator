@@ -63,4 +63,4 @@ The server reads `MINIMAX_API_KEY` or `MINIMAX_TOKEN_PLAN_KEY`, plus `MOONSHOT_A
 Verified on 2026-07-15 with strict type-check, lint, 96 test files (536 tests),
 and the production web build. The deterministic-source scan is clean.
 
-WS-606 is the next ticket and adds bounded Tier-3 conversations. It does not broaden model authority.
+Follow-on WS-606 is now implemented and adds bounded Tier-3 conversations without broadening model authority. See [WS-606 evidence](WS_606_BOUNDED_CONVERSATIONS.md).

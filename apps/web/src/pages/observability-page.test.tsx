@@ -34,6 +34,7 @@ const status = simulationStatusResponseSchema.parse({
     limits: { runCostCentsMax: "100", perAgentDailyTokens: 2_000 },
   },
   errors: { last24Ticks: 2 },
+  activity: { committedEvents: 12, latestEventSeq: 11, latestDigest: null },
   task: null,
   meta,
 });

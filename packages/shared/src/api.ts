@@ -34,6 +34,7 @@ import {
 } from "./llm-control";
 import { replayRunSchema } from "./replay";
 import { exportJobSchema } from "./export";
+import { digestStreamDataSchema } from "./event-stream";
 
 const positiveIntegerQuery = z.coerce.number().int().positive().safe();
 const nonnegativeIntegerQuery = z.coerce.number().int().nonnegative().safe();
@@ -337,6 +338,11 @@ export const simulationStatusResponseSchema = z
       })
       .strict(),
     errors: z.object({ last24Ticks: z.number().int().nonnegative().safe() }).strict(),
+    activity: z.object({
+      committedEvents: z.number().int().nonnegative().safe(),
+      latestEventSeq: z.number().int().nonnegative().safe(),
+      latestDigest: digestStreamDataSchema.nullable(),
+    }).strict(),
     replay: replayRunSchema.nullable().optional(),
     task: z
       .object({

@@ -14,7 +14,7 @@ TypeScript (strict) everywhere on Node 24 (Active LTS), organized as a pnpm-work
 packages/shared   # pure primitives + all Zod schemas (single source of truth)
 packages/engine   # deterministic core (no Node APIs, no I/O — ports injected)
 apps/server       # Fastify API + persistence wiring
-apps/web          # React dashboard (later phase)
+apps/web          # React 19/Vite dashboard
 ```
 
 pnpm (already installed, v11) over npm: strict node_modules makes undeclared cross-package imports fail — a free enforcement layer for module boundaries. Dev execution via `tsx`; internal-packages pattern (package `exports` point at `./src/*.ts`) so dev/test need no build step; `tsc --noEmit` is the typecheck gate; build-first for CI benchmarks. Node scripts must be cmd.exe-safe (no bashisms) since the primary dev machine is Windows.

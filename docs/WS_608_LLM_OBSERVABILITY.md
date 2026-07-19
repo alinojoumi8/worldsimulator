@@ -78,6 +78,4 @@ so dialogue cannot be mistaken for authority.
 - hostile transcript markup is rendered inert while authoritative structured
   terms and binding results remain visible.
 
-WS-609 is next: run and record the MiniMax/Kimi live-mode reference-budget
-acceptance script. Its explicit credentials and consent are not present in the
-current environment, so no live result is claimed here.
+Follow-on WS-609 is now implemented and records the MiniMax/Kimi live-mode reference-budget acceptance artifact without weakening the deterministic gate. See [WS-609 evidence](WS_609_LIVE_BUDGET_ACCEPTANCE.md).

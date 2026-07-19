@@ -18,7 +18,7 @@ No executor ran during the probe. A separate real HTTP smoke proved that the pro
 
 The first attempt used a top-level JSON Schema `oneOf` so each option could have a different parameter shape. OpenAI rejected the request before inference with `invalid_json_schema`; it reported zero model tokens. The retained transport schema therefore narrowed the provider response to the expected high-utility no-op shape, while the engine replay still checked it against the complete two-option menu.
 
-Future multi-shape Tier 2 integration should use provider-supported per-option schemas or a selection-only transport adapter that maps a returned action ID back to engine-authored parameters. The action registry remains the final authority either way.
+The completed WS-605 multi-shape Tier-2 path uses engine-authored option menus and maps the returned selection back to the exact registered parameters before current-state authority checks. Provider output never supplies a free-form executable shape; the action registry remains the final authority. See [WS-605 evidence](WS_605_TIER2_DECISIONS.md).
 
 ## Provider, usage, and cost
 

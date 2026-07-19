@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   DigestStreamData,
-  GapStreamData,
   IndicatorSeriesName,
   InjectWorldEventRequest,
 } from "@worldtangle/shared";
@@ -18,7 +17,6 @@ import {
   Clock3,
   Gauge,
   GitBranch,
-  ListRestart,
   Newspaper,
   Pause,
   Play,
@@ -125,6 +123,7 @@ function streamLabel(state: string): string {
     reconnecting: "Reconnecting",
     offline: "Offline",
     "auth-required": "Token required",
+    synced: "Durable snapshot",
   };
   return labels[state] ?? state;
 }
@@ -133,8 +132,10 @@ export function SimulationPage() {
   const simulationId = useParams().simId ?? "invalid";
   const { api, token } = useAppSession();
   const queryClient = useQueryClient();
-  const [latestDigest, setLatestDigest] = useState<DigestStreamData>();
-  const [gap, setGap] = useState<GapStreamData>();
+  const [streamDigest, setStreamDigest] = useState<{
+    readonly runId: string;
+    readonly data: DigestStreamData;
+  }>();
 
   const detail = useQuery({
     queryKey: ["simulation", simulationId, token],
@@ -169,23 +170,47 @@ export function SimulationPage() {
     ]);
   }, [queryClient, simulationId]);
   const handleDigest = useCallback((data: DigestStreamData) => {
-    setLatestDigest(data);
-  }, []);
+    if (runId !== undefined) setStreamDigest({ runId, data });
+  }, [runId]);
   const handleLifecycle = useCallback(() => {
     refreshRun();
   }, [refreshRun]);
-  const handleGap = useCallback((data: GapStreamData) => {
-    setGap(data);
+  const handleGap = useCallback(() => {
     refreshRun();
   }, [refreshRun]);
+  const terminalRun = status.data?.run.status === "completed" ||
+    status.data?.run.status === "stopped" ||
+    status.data?.run.status === "failed";
+  useEffect(() => {
+    if (!terminalRun || runId === undefined) return;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["events", simulationId, runId] }),
+      queryClient.invalidateQueries({ queryKey: ["indicators", simulationId, runId] }),
+    ]);
+  }, [queryClient, runId, simulationId, terminalRun]);
   const stream = useSimulationStream({
     simulationId,
     ...(runId === undefined ? {} : { runId }),
     token,
+    enabled: runId !== undefined && status.data !== undefined && !terminalRun,
+    ...(status.data === undefined
+      ? {}
+      : { initialLastEventId: status.data.activity.latestEventSeq }),
     onDigest: handleDigest,
     onLifecycle: handleLifecycle,
     onGap: handleGap,
   });
+
+  const liveDigest = streamDigest !== undefined && streamDigest.runId === runId
+    ? streamDigest.data
+    : undefined;
+  const durableDigest = status.data?.activity.latestDigest ?? undefined;
+  const latestDigest = liveDigest === undefined ||
+      (durableDigest !== undefined && durableDigest.tick > liveDigest.tick)
+    ? durableDigest
+    : liveDigest;
+  const displayedStreamState = terminalRun ? "synced" : stream.connectionState;
+  const displayedLastEventId = stream.lastEventId ?? status.data?.activity.latestEventSeq;
 
   const action = useMutation({
     mutationFn: async (requested: RunAction) => {
@@ -248,11 +273,11 @@ export function SimulationPage() {
           </div>
           <p>{formatSimDate(simDate)} <span>·</span> Run {runId}</p>
         </div>
-        <div className="stream-status" data-state={stream.connectionState}>
+        <div className="stream-status" data-state={displayedStreamState}>
           <span className="stream-status__pulse" />
           <div>
-            <strong>{streamLabel(stream.connectionState)}</strong>
-            <span>{stream.lastEventId === undefined ? "Committed event stream" : `Through event #${stream.lastEventId}`}</span>
+            <strong>{streamLabel(displayedStreamState)}</strong>
+            <span>{displayedLastEventId === undefined ? "Committed event stream" : `Through event #${displayedLastEventId}`}</span>
           </div>
         </div>
       </header>
@@ -333,14 +358,6 @@ export function SimulationPage() {
         {...(injectEvent.data === undefined ? {} : { receipt: injectEvent.data })}
         onInject={(input) => injectEvent.mutate(input)}
       />
-      {gap === undefined ? null : (
-        <div className="gap-notice" role="status">
-          <ListRestart size={18} />
-          <span>Live updates skipped events {gap.fromSeq}–{gap.toSeq}; the durable REST ledger was refreshed.</span>
-          <button type="button" onClick={() => setGap(undefined)} aria-label="Dismiss gap notice">Dismiss</button>
-        </div>
-      )}
-
       <section className="metric-grid" aria-label="Run status metrics">
         <MetricCard
           label="Tick rate"
@@ -358,8 +375,8 @@ export function SimulationPage() {
         />
         <MetricCard
           label="Committed events"
-          value={latestDigest?.counts.events ?? "—"}
-          detail={latestDigest === undefined ? "Waiting for next digest" : `At tick ${latestDigest.tick}`}
+          value={status.data.activity.committedEvents}
+          detail={`Through event #${status.data.activity.latestEventSeq}`}
           icon={<GitBranch size={21} />}
           accent="rust"
         />
@@ -459,6 +476,9 @@ export function SimulationPage() {
               </section>
             </div>
           )}
+          <p className="digest-counts__caption">
+            Latest committed tick activity{latestDigest === undefined ? "" : ` · tick ${latestDigest.tick}`}
+          </p>
           <dl className="digest-counts">
             <div><dt>Transactions</dt><dd>{latestDigest?.counts.transactions ?? "—"}</dd></div>
             <div><dt>Decisions</dt><dd>{latestDigest?.counts.decisions ?? "—"}</dd></div>

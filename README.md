@@ -10,12 +10,13 @@ An AI-driven economic and social world simulator: a deterministic economic engin
 WS-610 acceptance artifacts; it rejects missing, malformed, tampered or
 semantically inconsistent evidence.
 
-Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. See the [project status](docs/PROJECT_STATUS.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap). V1 begins at WS-801; external citizen tools and connector dependencies remain outside the roadmap through WS-1106.
+Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. V1 is active: WS-801 through WS-804 are complete, and WS-805's contract-backed investment read API is in progress; its browser explorer and Phase 8 acceptance gate remain open. See the [project status](docs/PROJECT_STATUS.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap). External citizen tools and connector dependencies remain outside the roadmap through WS-1106.
 
 ## Documentation
 
 | Doc | What it covers |
 |---|---|
+| [docs/README.md](docs/README.md) | Complete documentation index, status labels, and document ownership |
 | [docs/PRD.md](docs/PRD.md) | Product requirements: vision, use cases, functional/non-functional requirements, MVP definition, acceptance criteria |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 26-module architecture + phased roadmap (Phases 0–11) |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | REST + SSE contracts, versioned event catalog |
@@ -23,6 +24,7 @@ Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed
 | [docs/INITIAL_WORLD.md](docs/INITIAL_WORLD.md) | The "Riverbend" 100-agent starter world generation spec |
 | [docs/TASK_BACKLOG.md](docs/TASK_BACKLOG.md) | 93 engineering tasks mapped to phases |
 | [docs/LIVE_PROVIDER_CONTRACT.md](docs/LIVE_PROVIDER_CONTRACT.md) | Live Tier 2 proposal contract, usage/cost evidence, strict validation, and fallback proof |
+| [docs/LOCAL_OPERATIONS.md](docs/LOCAL_OPERATIONS.md) | Local startup, root `.env` loading, live-vs-mock creation, and runtime verification |
 | [docs/PHASE_3_FINANCE.md](docs/PHASE_3_FINANCE.md) | Ledger convention, genesis books, payroll/household rules, indicators, and financial APIs |
 | [docs/PHASE_4_FOUNDATIONS.md](docs/PHASE_4_FOUNDATIONS.md) | Legal lifecycle, incorporation, labor matching, events, persistence, and release gates |
 | [docs/WS_409_WORLD_EXPLORER.md](docs/WS_409_WORLD_EXPLORER.md) | Phase 4 read contracts, API routes, UI routes, why-panels, and acceptance evidence |
@@ -51,6 +53,7 @@ Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed
 | [docs/WS_708_PLAYWRIGHT_ACCEPTANCE.md](docs/WS_708_PLAYWRIGHT_ACCEPTANCE.md) | Production-shaped Chromium acceptance, bounded world-event UI, mock-mode isolation, and cross-platform CI evidence |
 | [docs/WS_709_SCENARIO_REGRESSION.md](docs/WS_709_SCENARIO_REGRESSION.md) | Versioned seed-42/mock envelopes, measured baseline, invariant repairs, and tuning protocol |
 | [docs/WS_710_MVP_ACCEPTANCE.md](docs/WS_710_MVP_ACCEPTANCE.md) | Complete PRD §28 acceptance matrix, deterministic replay repairs, and release evidence |
+| [docs/WS_805_INVESTMENT_EXPLORER.md](docs/WS_805_INVESTMENT_EXPLORER.md) | Current WS-805 backend read surface and explicitly remaining UI/Phase 8 gate |
 | [docs/adr/](docs/adr/README.md) | 15 architecture decision records |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | Current status, assumptions, open questions |
 
@@ -76,11 +79,12 @@ pnpm build       # type-check and build apps/web into apps/web/dist
 pnpm start       # serve the built dashboard and API together on port 4000
 ```
 
-The two `acceptance:*` commands automatically load an existing repository-root
-`.env`; the file is git-ignored, and both explicit live-consent values remain
-mandatory. Ordinary development, test and gate commands do not auto-load it.
+`pnpm dev`, `pnpm start`, and the two `acceptance:*` commands automatically load
+an existing repository-root `.env`. The file is git-ignored, provider keys stay
+server-side, and both acceptance commands still require their explicit live-consent
+values. Test and gate commands do not auto-load `.env`.
 
-During development, Vite proxies `/api` to port 4000. For production-style local use, run `pnpm build && pnpm start`. Configuration is optional; defaults are safe. Export variables from `.env.example` in your shell, or launch Node with an env-file mechanism if you want overrides. If `WORLDTANGLE_API_TOKEN` is set, enter it through the dashboard's **API token** control; it is kept in `sessionStorage`, not persistent browser storage.
+During development, Vite proxies `/api` to port 4000. For production-style local use, run `pnpm build && pnpm start`. Mock runs need no provider configuration. The dashboard create form defaults to live `MiniMax-M3` with a 128,000-token per-agent daily guardrail, but mock mode remains selectable for offline deterministic runs. A live run needs a configured MiniMax key; changing `.env` never changes an already-created run's pinned manifest, so create a new run when switching modes. If `WORLDTANGLE_API_TOKEN` is set, enter it through the dashboard's **API token** control; it is kept in `sessionStorage`, not persistent browser storage. See [local operations](docs/LOCAL_OPERATIONS.md) for the exact verification path.
 
 Create and inspect a short simulation:
 

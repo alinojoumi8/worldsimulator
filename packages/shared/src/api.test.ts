@@ -10,6 +10,7 @@ import {
   relationshipListQuerySchema,
   simulationListQuerySchema,
 } from "./api";
+import { companyEquityHolderSchema } from "./phase4-api";
 
 const createRequest = {
   name: "baseline-riverbend",
@@ -120,6 +121,20 @@ describe("API request schemas", () => {
     expect(agentDecisionListResponseSchema.safeParse({
       ...response,
       items: [{ ...response.items[0], llm: { callId: "llm_00000001" } }],
+    }).success).toBe(false);
+  });
+
+  it("accepts venture funds in generalized company cap tables", () => {
+    const holder = {
+      kind: "venture_fund",
+      id: "vfund_00000001",
+      name: "Foundry Fund I",
+    };
+
+    expect(companyEquityHolderSchema.safeParse(holder).success).toBe(true);
+    expect(companyEquityHolderSchema.safeParse({
+      ...holder,
+      id: "agt_00000001",
     }).success).toBe(false);
   });
 });

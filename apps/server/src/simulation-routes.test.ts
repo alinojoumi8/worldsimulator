@@ -55,6 +55,13 @@ function createService(): SimulationApi {
     getConversation: vi.fn(() => ({ conversation: { id: "cnv_00000001" } })),
     listCompanies: vi.fn(() => ({ items: [], nextCursor: null })),
     getCompany: vi.fn(() => ({ company: { id: "co_00000001" } })),
+    listInvestmentProposals: vi.fn(() => ({ items: [], nextCursor: null })),
+    getInvestmentProposal: vi.fn(() => ({ proposal: { id: "prop_00000001" } })),
+    listInvestments: vi.fn(() => ({ items: [], nextCursor: null })),
+    getInvestment: vi.fn(() => ({ investment: { id: "inv_00000001" } })),
+    getInvestmentCapTable: vi.fn(() => ({ capTable: { company: { id: "co_00000001" } } })),
+    listInvestmentDistributions: vi.fn(() => ({ items: [], nextCursor: null })),
+    getInvestmentDistribution: vi.fn(() => ({ distribution: { id: "dist_00000001" } })),
     listContracts: vi.fn(() => ({ items: [], nextCursor: null })),
     getContract: vi.fn(() => ({ contract: { id: "ctr_00000001" } })),
     listJobs: vi.fn(() => ({ items: [], nextCursor: null })),
@@ -213,6 +220,88 @@ describe("simulation routes", () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(service.getCompany).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("validates and dispatches every WS-805 investment read", async () => {
+    const service = createService();
+    const app = createApp(service);
+    const companyId = "co_00000001";
+    const proposalId = "prop_00000001";
+    const investmentId = "inv_00000001";
+    const fundId = "vfund_00000001";
+    const distributionId = "dist_00000001";
+    const responses = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investment-proposals?runId=${runId}&status=completed&companyId=${companyId}&limit=10`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investment-proposals/${proposalId}?runId=${runId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investments?runId=${runId}&companyId=${companyId}&fundId=${fundId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investments/${investmentId}?runId=${runId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/companies/${companyId}/cap-table?runId=${runId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investment-distributions?runId=${runId}&companyId=${companyId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/investment-distributions/${distributionId}?runId=${runId}`,
+      }),
+    ]);
+
+    expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+    expect(service.listInvestmentProposals).toHaveBeenCalledWith(simulationId, {
+      runId,
+      status: "completed",
+      companyId,
+      limit: 10,
+    });
+    expect(service.getInvestmentProposal).toHaveBeenCalledWith(
+      simulationId,
+      proposalId,
+      runId,
+    );
+    expect(service.listInvestments).toHaveBeenCalledWith(simulationId, {
+      runId,
+      companyId,
+      fundId,
+      limit: 50,
+    });
+    expect(service.getInvestment).toHaveBeenCalledWith(simulationId, investmentId, runId);
+    expect(service.getInvestmentCapTable).toHaveBeenCalledWith(simulationId, companyId, runId);
+    expect(service.listInvestmentDistributions).toHaveBeenCalledWith(simulationId, {
+      runId,
+      companyId,
+      limit: 50,
+    });
+    expect(service.getInvestmentDistribution).toHaveBeenCalledWith(
+      simulationId,
+      distributionId,
+      runId,
+    );
+    for (const response of responses) {
+      expect(response.json()).toMatchObject({ meta: { simulated: true, apiVersion: 1 } });
+    }
+
+    const invalid = await app.inject({
+      method: "GET",
+      url: `/api/v1/simulations/${simulationId}/investments?fundId=agt_00000001`,
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(service.listInvestments).toHaveBeenCalledTimes(1);
     await app.close();
   });
 

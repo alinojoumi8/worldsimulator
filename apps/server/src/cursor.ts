@@ -46,7 +46,14 @@ export interface TransactionCursor {
   readonly transactionId: string;
 }
 
-export type Phase4CursorView = "companies" | "contracts" | "jobs" | "loans";
+export type Phase4CursorView =
+  | "companies"
+  | "contracts"
+  | "jobs"
+  | "loans"
+  | "investment-proposals"
+  | "investments"
+  | "investment-distributions";
 
 export interface Phase4Cursor {
   readonly runId: string;
@@ -192,7 +199,13 @@ export function decodePhase4Cursor(
       ? /^ctr_[0-9a-z]{8,}$/
       : expectedView === "jobs"
         ? /^job_[0-9a-z]{8,}$/
-        : /^loan_[0-9a-z]{8,}$/;
+        : expectedView === "loans"
+          ? /^loan_[0-9a-z]{8,}$/
+          : expectedView === "investment-proposals"
+            ? /^prop_[0-9a-z]{8,}$/
+            : expectedView === "investments"
+              ? /^inv_[0-9a-z]{8,}$/
+              : /^dist_[0-9a-z]{8,}$/;
   if (
     !isExactRecord(parsed, ["id", "kind", "order", "runId", "view"]) ||
     parsed["kind"] !== "phase4-read" ||

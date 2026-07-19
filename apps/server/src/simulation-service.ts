@@ -43,6 +43,9 @@ import type {
   CompanyListQuery,
   ContractListQuery,
   InstitutionListQuery,
+  InvestmentDistributionListQuery,
+  InvestmentListQuery,
+  InvestmentProposalListQuery,
   JobListQuery,
   RelationshipListQuery,
   ReplayRequest,
@@ -101,6 +104,7 @@ import {
   SqliteEnergyStore,
   SqliteExportStore,
   SqliteFinanceStore,
+  SqliteInvestmentReadStore,
   SqliteLlmCallStore,
   SqliteLlmResponseCache,
   SqliteLlmControlStore,
@@ -171,6 +175,7 @@ import {
 import { createNegotiationBindingPhaseHandler } from "./negotiation-phase";
 import { createInvestmentProposalPhaseHandler } from "./investment-phase";
 import { TimedLlmProvider } from "./llm-telemetry-provider";
+import { digestForCommittedEvent } from "./run-digest";
 import {
   createNewsStoryPhaseHandler,
   discoverNewsStoryOpportunities,
@@ -1613,6 +1618,13 @@ export class SimulationService implements SimulationApi {
       const calls = new SqliteLlmCallStore(db, location.runId).summary();
       const observability = new SqliteObservabilityReadStore(db, location.runId);
       const replay = new SqliteReplayStore(db, location.runId).get();
+      const eventStore = new SqliteEventStore(db, location.runId);
+      const latestEvent = eventStore.page({ direction: "backward", limit: 1 }).items[0];
+      const latestDigestEvent = eventStore.page({
+        direction: "backward",
+        limit: 1,
+        type: "simulation.tick.completed",
+      }).items[0];
       return {
         run: {
           id: run.id,
@@ -1639,6 +1651,13 @@ export class SimulationService implements SimulationApi {
         },
         errors: {
           last24Ticks: observability.errorCountSinceTick(Math.max(0, run.currentTick - 23)),
+        },
+        activity: {
+          committedEvents: eventStore.count(),
+          latestEventSeq: latestEvent?.seq ?? 0,
+          latestDigest: latestDigestEvent === undefined
+            ? null
+            : digestForCommittedEvent(latestDigestEvent) ?? null,
         },
         replay,
         task:
@@ -1902,6 +1921,141 @@ export class SimulationService implements SimulationApi {
     const location = this.locator.locate(simulationId, runId);
     return this.withDatabase(location, (db) =>
       new SqlitePhase4ReadStore(db, location.runId).getCompany(companyId)
+    );
+  }
+
+  listInvestmentProposals(
+    simulationId: string,
+    query: InvestmentProposalListQuery,
+  ) {
+    const location = this.locator.locate(simulationId, query.runId);
+    return this.withDatabase(location, (db) => {
+      const cursor = query.cursor === undefined
+        ? undefined
+        : decodePhase4Cursor(
+            query.cursor,
+            location.runId,
+            "investment-proposals",
+          );
+      const page = phase4Page(
+        new SqliteInvestmentReadStore(db, location.runId).listProposals(query),
+        query.limit,
+        cursor,
+        (proposal) => proposal.proposedTick,
+      );
+      const last = page.items.at(-1);
+      return {
+        items: page.items,
+        nextCursor: page.hasMore && last !== undefined
+          ? encodePhase4Cursor({
+              runId: location.runId,
+              view: "investment-proposals",
+              order: last.proposedTick,
+              id: last.id,
+            })
+          : null,
+      };
+    });
+  }
+
+  getInvestmentProposal(
+    simulationId: string,
+    proposalId: string,
+    runId?: string,
+  ) {
+    const location = this.locator.locate(simulationId, runId);
+    return this.withDatabase(location, (db) =>
+      new SqliteInvestmentReadStore(db, location.runId).getProposal(proposalId)
+    );
+  }
+
+  listInvestments(simulationId: string, query: InvestmentListQuery) {
+    const location = this.locator.locate(simulationId, query.runId);
+    return this.withDatabase(location, (db) => {
+      const cursor = query.cursor === undefined
+        ? undefined
+        : decodePhase4Cursor(query.cursor, location.runId, "investments");
+      const page = phase4Page(
+        new SqliteInvestmentReadStore(db, location.runId).listInvestments(query),
+        query.limit,
+        cursor,
+        (investment) => investment.completedTick,
+      );
+      const last = page.items.at(-1);
+      return {
+        items: page.items,
+        nextCursor: page.hasMore && last !== undefined
+          ? encodePhase4Cursor({
+              runId: location.runId,
+              view: "investments",
+              order: last.completedTick,
+              id: last.id,
+            })
+          : null,
+      };
+    });
+  }
+
+  getInvestment(simulationId: string, investmentId: string, runId?: string) {
+    const location = this.locator.locate(simulationId, runId);
+    return this.withDatabase(location, (db) =>
+      new SqliteInvestmentReadStore(db, location.runId).getInvestment(investmentId)
+    );
+  }
+
+  getInvestmentCapTable(
+    simulationId: string,
+    companyId: string,
+    runId?: string,
+  ) {
+    const location = this.locator.locate(simulationId, runId);
+    return this.withDatabase(location, (db) => ({
+      capTable: new SqliteInvestmentReadStore(db, location.runId).capTable(companyId),
+    }));
+  }
+
+  listInvestmentDistributions(
+    simulationId: string,
+    query: InvestmentDistributionListQuery,
+  ) {
+    const location = this.locator.locate(simulationId, query.runId);
+    return this.withDatabase(location, (db) => {
+      const cursor = query.cursor === undefined
+        ? undefined
+        : decodePhase4Cursor(
+            query.cursor,
+            location.runId,
+            "investment-distributions",
+          );
+      const page = phase4Page(
+        new SqliteInvestmentReadStore(db, location.runId).listDistributions(query),
+        query.limit,
+        cursor,
+        (distribution) => distribution.distributedTick,
+      );
+      const last = page.items.at(-1);
+      return {
+        items: page.items,
+        nextCursor: page.hasMore && last !== undefined
+          ? encodePhase4Cursor({
+              runId: location.runId,
+              view: "investment-distributions",
+              order: last.distributedTick,
+              id: last.id,
+            })
+          : null,
+      };
+    });
+  }
+
+  getInvestmentDistribution(
+    simulationId: string,
+    distributionId: string,
+    runId?: string,
+  ) {
+    const location = this.locator.locate(simulationId, runId);
+    return this.withDatabase(location, (db) =>
+      new SqliteInvestmentReadStore(db, location.runId).getDistribution(distributionId)
     );
   }
 

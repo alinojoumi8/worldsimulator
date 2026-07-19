@@ -1,6 +1,6 @@
 # ADR-0009 — Hybrid state + event log (not full event sourcing); snapshots; replay & reproducibility limits
 
-**Status:** accepted · **Date:** 2026-07-14
+**Status:** accepted, amended · **Date:** 2026-07-14 · **Amended:** 2026-07-18
 
 ## Context
 
@@ -30,5 +30,5 @@ We need: full audit trail, tick-level replay, run comparison, crash recovery —
 - Dashboards query relational state directly; explanations query the log — both first-class.
 - The LLM cache is part of a run's artifact set (export/archive includes it).
 - SQLite snapshots include the response cache and its append-only audit stream, but both are operational replay metadata excluded from the authoritative logical world hash and simulation event-ID sequence.
-- LLM budget usage and kill-switch state are authoritative because they govern future execution. They are therefore included in state-hash v15 and main `evt_*` causality, unlike response-cache metadata.
+- LLM budget usage and kill-switch state are authoritative because they govern future execution. They are therefore included in the logical hash and main `evt_*` causality, unlike response-cache metadata. The current hash is v26 after Phase 8 persistence additions; each ticket records the version it introduced.
 - Two sources must be kept honest: the `commitTick` choke point + drift-detecting stateHash events are load-bearing and tested (kill tests, golden replays).

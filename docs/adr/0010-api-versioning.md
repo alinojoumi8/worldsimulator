@@ -1,6 +1,6 @@
 # ADR-0010 — URI-versioned API + schemaVersion on payloads
 
-**Status:** accepted · **Date:** 2026-07-14
+**Status:** accepted, amended · **Date:** 2026-07-14 · **Amended:** 2026-07-18
 
 ## Context
 
@@ -9,8 +9,8 @@ The frontend, exports, and (later) external consumers depend on API shapes and e
 ## Decision
 
 - **REST:** major version in the URI (`/api/v1`). Within v1: additive-only changes (new fields optional, new endpoints); breaking changes open `/api/v2` with a deprecation overlap. No header-based content negotiation.
-- **Events & DTOs:** every event payload carries an integer `schemaVersion` (per type, starting at 1); envelope fields are fixed for the life of the store format. Payload evolution prefers additive; a breaking payload change bumps that type's version, and readers keep decoding older versions (needed for replay/exports of old runs).
-- **Source of truth:** Zod schemas in `packages/shared` → JSON Schema bundle (`GET /api/v1/schemas/events.json`) → OpenAPI 3.1 (`GET /api/v1/openapi.json`). Contract tests validate every response and every emitted event against these; the frontend consumes generated types from the same schemas — drift fails CI.
+- **Events & DTOs:** every event envelope carries an integer `schemaVersion` (per type, starting at 1); versioned stream/artifact payloads carry their own version field where defined. Envelope fields are fixed for the life of the store format. Payload evolution prefers additive; a breaking event payload change bumps that type's version, and readers keep decoding older versions (needed for replay/exports of old runs).
+- **Source of truth:** Zod schemas in `packages/shared`. The Phase 0 event/intent/manifest/error contracts export a golden-hashed Draft 2020-12 bundle from the package. Server, frontend, and contract tests consume shared Zod schemas directly. HTTP JSON Schema publication and OpenAPI 3.1 endpoints are not implemented yet and are labelled planned in API_CONTRACTS.
 - Ruleset, prompt-pack, and event-schema versions are pinned in run manifests, tying data compatibility to reproducibility (ADR-0009).
 
 ## Alternatives considered
@@ -22,4 +22,4 @@ The frontend, exports, and (later) external consumers depend on API shapes and e
 ## Consequences
 
 - Slight ceremony per payload change (version bump + reader support), repaid every time an old run is opened.
-- OpenAPI generation is deferred until Phase 1 (schemas exist from Phase 0; the endpoint that serves them comes with the API layer).
+- OpenAPI/HTTP schema publication remains a future additive API capability; callers must not assume `/schemas/events.json` or `/openapi.json` exists today.

@@ -96,5 +96,4 @@ Verified on 2026-07-15 with strict type-check, lint, 99 test files (555 tests),
 and the production web build. Vitest is capped at four workers so the SQLite-heavy
 integration and 360-tick suites remain reliable under concurrent execution.
 
-WS-607 is next and binds accepted purchase and job terms only after fresh domain
-validation.
+Follow-on WS-607 is now implemented and binds accepted purchase and job terms only after fresh domain validation. See [WS-607 evidence](WS_607_NEGOTIATION_BINDINGS.md).

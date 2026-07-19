@@ -6,10 +6,11 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ---
 
-## Phase 0 — Foundation (this session's deliverable)
+## Phase 0 — Foundation (complete)
 
 ### WS-001 — Monorepo scaffold
 `infra` · `S` · deps: — · Ind? yes
+**Status:** implemented. The strict pnpm/TypeScript workspace, package boundaries, Vitest, determinism lint rules, LF policy, ignore rules, and Windows/Ubuntu CI matrix are live.
 **Do:** pnpm workspace (packages/shared, packages/engine, apps/server), strict tsconfig, vitest, eslint with engine determinism bans, `.gitattributes` (LF), `.gitignore`, CI workflow (win+linux). **Accept:** `pnpm install && pnpm test && pnpm typecheck` green on clean checkout. **Tests:** CI itself.
 
 ### WS-002 — Money primitives ✅
@@ -39,6 +40,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ### WS-007 — Server skeleton
 `server` · `backend` · `S` · deps: WS-005 · Ind? yes
+**Status:** implemented. The Fastify app factory exposes the versioned discovery, health, and version routes, binds loopback by default, serves RFC 9457 errors, and integrates the optional bearer guard.
 **Do:** Fastify app factory, `/api/v1/health`, `/api/v1/version`, 127.0.0.1 binding, problem+json error hook. **Accept:** health returns contract shape incl. `simulated:true`. **Tests:** `fastify.inject` health + error shape.
 
 ---
@@ -47,10 +49,12 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ### WS-101 — SQLite storage + migrations
 `M20` · `backend` · `M` · deps: WS-006 · Ind? yes
+**Status:** implemented. Per-run SQLite files use WAL, foreign keys, safe integers, checksummed idempotent migrations, and the documented data layout with upgrade/reopen coverage.
 **Do:** better-sqlite3 wiring (WAL, `defaultSafeIntegers`), migration runner, data-dir layout `data/<simId>/<runId>/world.db`. **Accept:** migrations idempotent up from empty; bigint round-trips. **Tests:** migration cycle, bigint storage, WAL mode assertion.
 
 ### WS-102 — Event store (durable)
 `M20` · `backend` · `M` · deps: WS-101 · Ind? yes
+**Status:** implemented. The append-only store enforces gapless run sequences, atomic batches, immutable rows, deterministic filters/cursors, bigint payload round-trips, and the 10,000-event benchmark gate.
 **Do:** append-only event table `(runId, seq)` unique, gapless seq allocation, batch append, cursor reads, type/tick/correlation indexes. **Accept:** UPDATE/DELETE rejected at store layer; 10k-event batch append <100ms. **Tests:** append-only enforcement, gaplessness, cursor pagination determinism.
 
 ### WS-103 — commitTick transaction boundary ✅
@@ -59,6 +63,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ### WS-104 — Run state machine & manifest
 `M01` · `backend` · `M` · deps: WS-103 · Ind? no
+**Status:** implemented. Immutable manifests, guarded lifecycle transitions, restart-safe checkpoints, continuous supervision/recovery, manual advance, and end-tick completion are persisted and tested.
 **Do:** SimulationRun lifecycle (created/running/paused/…), write-once manifest, tick counter persistence, `advance(n)`. **Accept:** illegal transitions rejected (CONFLICT); manifest immutable. **Tests:** transition table, manifest write-once, resume-at-tick.
 
 ### WS-105 — Scheduler ✅
@@ -72,15 +77,17 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ### WS-107 — Admin command journal
 `M01/M24` · `backend` · `S` · deps: WS-104 · Ind? yes
+**Status:** implemented. Accepted create/control/advance mutations journal their command before the effect in the same durable workflow; rejected mutations append nothing.
 **Do:** every control mutation journals `admin.command.received` before effect. **Accept:** replayed journal reproduces control timing. **Tests:** journal-before-effect ordering.
 
 ### WS-108 — Lifecycle + status + events API
 `M22` · `backend` · `M` · deps: WS-104, WS-107 · Ind? no
+**Status:** implemented. Strict shared schemas and Fastify routes cover create/list/detail, lifecycle controls, sync/async advance, durable status/task polling, event filters, run-bound cursors, and RFC 9457 errors.
 **Do:** POST /simulations, controls, advance, status, GET /events with filters/cursors per API_CONTRACTS. **Accept:** contract tests pass; 409s on illegal transitions. **Tests:** inject tests per endpoint incl. pagination determinism.
 
 ### WS-109 — SSE stream v0 ✅
 `M22` · `backend` · `M` · deps: WS-108 · Ind? yes
-**Status:** implemented. **Do:** committed-row `/stream` with digest/lifecycle/gap schemas, `Last-Event-ID` resume, heartbeat, backlog limit, and clean shutdown; authenticated browser fetch-stream with bounded retry. **Accept:** reconnect resumes from seq, 401 suspends, and a lagging client refreshes durable REST state after a gap. **Tests:** server stream integration plus parser/header/contract client tests.
+**Status:** implemented. **Do:** committed-row `/stream` with digest/lifecycle/gap schemas, immediate connection comment, durable status bootstrap, `Last-Event-ID` resume, heartbeat, backlog limit, terminal-run shutdown, and clean disconnect; authenticated browser fetch-stream with bounded retry. **Accept:** the first connection tails from durable status, reconnect resumes from seq, 401 suspends, terminal runs use the durable digest, and a lagging client refreshes durable REST state after a gap. **Tests:** server stream integration plus parser/header/contract client tests.
 
 ### WS-110 — Structured logging & correlation ✅
 `M25` · `backend` · `S` · deps: WS-101 · Ind? yes
@@ -405,6 +412,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 ### WS-804 — Distributions `M10` · `backend` · `S` · deps: WS-803 · Ind? yes — **Do:** pro-rata dividends (largest remainder). **Accept:** exactness property. **Tests:** allocation tests.
 **Status:** implemented. Current ownership stakes are aggregated by beneficial owner, sorted by canonical holder kind/id, and split with the shared largest-remainder primitive so every positive integer-cent dividend is allocated exactly and independently of input/database order. Migration 34 adds immutable distribution/allocation journals whose triggers cross-check the historical cap table, active recipient accounts, exact domestic `dividend` transaction, and typed request/completion events. Unfunded or unroutable distributions fail before consuming IDs; duplicate references are idempotent. Logical state-hash v26, property/golden tests, tamper guards, migration upgrade/reopen, atomic rollback, and snapshot restore-equivalence are covered. See [WS-804 evidence](WS_804_INVESTMENT_DISTRIBUTIONS.md).
 ### WS-805 — Investment API + UI `M22/M23` · `backend+frontend` · `M` · deps: WS-803 · Ind? no — **Do:** proposals/investments endpoints, cap-table + transcript UI. **Accept:** UC-8 explorable. **Tests:** contract + component.
+**Status:** in progress. Strict shared contracts and read-only list/detail routes now expose proposals, investments, generalized company cap tables, and distributions with run-bound cursors, resolved identities, exact term/cap-table diffs, transcript summaries, and causal why-records. The generalized company-detail contract accepts discriminated agent or venture-fund holders. React pages/navigation, component/browser coverage, and the default-world Phase 8 explorable-close gate are still required before this ticket is complete. See [WS-805 progress](WS_805_INVESTMENT_EXPLORER.md).
 
 ## Phase 9 — Securities market [V1]
 
@@ -433,6 +441,8 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 ---
 
 **Totals:** 7 (P0) + 10 (P1) + 9 (P2) + 10 (P3) + 9 (P4) + 8 (P5) + 10 (P6) + 10 (P7) + 5 (P8) + 5 (P9) + 4 (P10) + 6 (P11) = **93 tasks.**
+
+Current boundary (2026-07-18): **77 complete**, **1 in progress** (WS-805), and **15 not started** (WS-901–1106). Phase 9 must not begin until WS-805 and the Phase 8 gate are complete.
 
 Citizen tools, connectors and real external accounts are deliberately outside
 all 93 tasks. After WS-1106, any self-hosted open-source provider-neutral tool

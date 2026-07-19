@@ -18,6 +18,7 @@ interface CreateFormState {
   name: string;
   seed: string;
   endTick: string;
+  llmMode: "live" | "mock";
   runCostCentsMax: string;
   perAgentDailyTokens: string;
 }
@@ -26,8 +27,9 @@ const CREATE_DEFAULTS: CreateFormState = {
   name: "Riverbend baseline",
   seed: "42",
   endTick: "360",
+  llmMode: "live",
   runCostCentsMax: "500",
-  perAgentDailyTokens: "2000",
+  perAgentDailyTokens: "128000",
 };
 
 function formatCreatedAt(value: string): string {
@@ -69,7 +71,7 @@ export function LibraryPage() {
       scenario: {
         worldSpec: "riverbend-100@1",
         seed: Number(form.seed),
-        llmMode: "mock",
+        llmMode: form.llmMode,
         budgets: {
           runCostCentsMax: form.runCostCentsMax,
           perAgentDailyTokens: Number(form.perAgentDailyTokens),
@@ -148,6 +150,22 @@ export function LibraryPage() {
               />
             </div>
           </div>
+          <div className="llm-mode-field">
+            <label htmlFor="simulation-llm-mode">LLM mode</label>
+            <select
+              id="simulation-llm-mode"
+              value={form.llmMode}
+              onChange={(event) => update("llmMode", event.target.value)}
+            >
+              <option value="live">Live · MiniMax M3</option>
+              <option value="mock">Mock · deterministic</option>
+            </select>
+            <p>
+              {form.llmMode === "live"
+                ? "Tier-2 decisions call MiniMax M3 and count against the run budget."
+                : "Deterministic responses make the run fully offline and repeatable."}
+            </p>
+          </div>
           <details className="budget-details">
             <summary>Budget guardrails</summary>
             <div className="form-grid">
@@ -183,7 +201,10 @@ export function LibraryPage() {
             <Play size={18} fill="currentColor" />
             {createSimulation.isPending ? "Creating Riverbend…" : "Create Riverbend run"}
           </button>
-          <p className="form-footnote">Mock LLM · income tax baseline 18% · 360-day calendar</p>
+          <p className="form-footnote">
+            {form.llmMode === "live" ? "MiniMax M3 live" : "Mock LLM"}
+            {" · income tax baseline 18% · 360-day calendar"}
+          </p>
         </form>
       </section>
 
