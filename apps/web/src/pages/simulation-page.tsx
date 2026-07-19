@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   DigestStreamData,
@@ -181,6 +181,13 @@ export function SimulationPage() {
   const terminalRun = status.data?.run.status === "completed" ||
     status.data?.run.status === "stopped" ||
     status.data?.run.status === "failed";
+  useEffect(() => {
+    if (!terminalRun || runId === undefined) return;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["events", simulationId, runId] }),
+      queryClient.invalidateQueries({ queryKey: ["indicators", simulationId, runId] }),
+    ]);
+  }, [queryClient, runId, simulationId, terminalRun]);
   const stream = useSimulationStream({
     simulationId,
     ...(runId === undefined ? {} : { runId }),

@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "e9d01db41e75e29b7ffc12b3b523418860d2b1ee",
-    "indexed_at": "2026-07-18T10:37:01Z",
-    "project": "worldsimulator-phase6-minimax-kimi",
-    "nodes": 6316,
-    "edges": 22601,
-    "original_size": 21102592,
-    "compressed_size": 3729021,
+    "commit": "c22c5a948c6e3c91f7bfaa37325325a7be2ed855",
+    "indexed_at": "2026-07-19T00:05:03Z",
+    "project": "C-Users-matri-Documents-myprojects-worldsimulator",
+    "nodes": 6295,
+    "edges": 22476,
+    "original_size": 23461888,
+    "compressed_size": 3743242,
     "compression_level": 3
 }

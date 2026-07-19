@@ -79,7 +79,7 @@ describe("WorldTangle app shell", () => {
     expect(screen.getByRole("button", { name: "API secured" })).toBeTruthy();
   });
 
-  it("renders finance and employment panels from the indicator API contract", async () => {
+  it("renders indicator panels and refreshes their terminal snapshot", async () => {
     window.history.pushState({}, "", "/simulations/sim_00000001");
     const meta = { simulated: true, apiVersion: 1 } as const;
     const spend = {
@@ -88,6 +88,8 @@ describe("WorldTangle app shell", () => {
       outputTokens: 0,
       costCentsEstimate: "0",
     };
+    let indicatorRequests = 0;
+    let statusRequests = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       void init;
       const path = String(input);
@@ -95,18 +97,20 @@ describe("WorldTangle app shell", () => {
         return new Response("", { status: 401 });
       }
       if (path.includes("/indicators?")) {
+        indicatorRequests += 1;
+        const indicatorTick = indicatorRequests === 1 ? 1 : 2;
         return new Response(JSON.stringify({
           series: [
-            { name: "gdpProxy", unit: "cents", points: [[0, "50000"], [2, "75000"]] },
-            { name: "cpi", unit: "index", points: [[0, 1000], [2, 1036]] },
-            { name: "m1", unit: "cents", points: [[0, "100000"], [2, "125000"]] },
-            { name: "averageWage", unit: "cents", points: [[0, "3000000"], [2, "3150000"]] },
-            { name: "unemploymentRate", unit: "bp", points: [[0, 800], [2, 725]] },
-            { name: "creditOutstanding", unit: "cents", points: [[0, "40000"], [2, "35000"]] },
-            { name: "defaultRate", unit: "bp", points: [[0, 0], [2, 125]] },
-            { name: "businessCount", unit: "count", points: [[0, 14], [2, 15]] },
-            { name: "treasuryBalance", unit: "cents", points: [[0, "900000"], [2, "875000"]] },
-            { name: "sentimentIndex", unit: "bp", points: [[0, 0], [2, -300]] },
+            { name: "gdpProxy", unit: "cents", points: [[0, "50000"], [indicatorTick, "75000"]] },
+            { name: "cpi", unit: "index", points: [[0, 1000], [indicatorTick, 1036]] },
+            { name: "m1", unit: "cents", points: [[0, "100000"], [indicatorTick, "125000"]] },
+            { name: "averageWage", unit: "cents", points: [[0, "3000000"], [indicatorTick, "3150000"]] },
+            { name: "unemploymentRate", unit: "bp", points: [[0, 800], [indicatorTick, 725]] },
+            { name: "creditOutstanding", unit: "cents", points: [[0, "40000"], [indicatorTick, "35000"]] },
+            { name: "defaultRate", unit: "bp", points: [[0, 0], [indicatorTick, 125]] },
+            { name: "businessCount", unit: "count", points: [[0, 14], [indicatorTick, 15]] },
+            { name: "treasuryBalance", unit: "cents", points: [[0, "900000"], [indicatorTick, "875000"]] },
+            { name: "sentimentIndex", unit: "bp", points: [[0, 0], [indicatorTick, -300]] },
           ],
           meta,
         }), { status: 200, headers: { "content-type": "application/json" } });
@@ -118,12 +122,15 @@ describe("WorldTangle app shell", () => {
         });
       }
       if (path.includes("/status")) {
+        statusRequests += 1;
+        const terminal = statusRequests > 1;
+        const currentTick = terminal ? 2 : 1;
         return new Response(JSON.stringify({
           run: {
             id: "run_00000001",
-            status: "paused",
-            currentTick: 2,
-            simDate: "Y0001-M01-D03",
+            status: terminal ? "completed" : "running",
+            currentTick,
+            simDate: terminal ? "Y0001-M01-D03" : "Y0001-M01-D02",
             endTick: 360,
           },
           tickRate: { ticksPerSec: 0 },
@@ -147,8 +154,8 @@ describe("WorldTangle app shell", () => {
             latestEventSeq: 7,
             latestDigest: {
               v: 1,
-              tick: 2,
-              simDate: "Y0001-M01-D03",
+              tick: currentTick,
+              simDate: terminal ? "Y0001-M01-D03" : "Y0001-M01-D02",
               indicators: {},
               counts: {
                 events: 3,
@@ -206,9 +213,13 @@ describe("WorldTangle app shell", () => {
     expect(screen.getByText("$31500.00")).toBeTruthy();
     expect(screen.getByText("7.25%")).toBeTruthy();
     expect(screen.getAllByText("Through event #7")).toHaveLength(2);
-    expect(screen.getByText("Latest committed tick activity · tick 2")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Money supply from tick 0 through tick 2" }))
-      .toBeTruthy();
+    expect(await screen.findByText("Latest committed tick activity · tick 2", {}, {
+      timeout: 3_000,
+    })).toBeTruthy();
+    expect(await screen.findByRole("img", {
+      name: "Money supply from tick 0 through tick 2",
+    }, { timeout: 3_000 })).toBeTruthy();
+    expect(indicatorRequests).toBeGreaterThanOrEqual(2);
     expect(fetchMock.mock.calls.some(([input]) => (
       String(input).includes(
         "series=gdpProxy%2Ccpi%2Cm1%2CaverageWage%2CunemploymentRate%2CcreditOutstanding%2CdefaultRate%2CbusinessCount%2CtreasuryBalance%2CsentimentIndex&max=5000",
