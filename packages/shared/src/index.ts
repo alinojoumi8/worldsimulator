@@ -1,5 +1,6 @@
 export * from "./api";
 export * from "./agent";
+export * from "./agent-lab";
 export * from "./agent-catalogs";
 export * from "./codec";
 export * from "./conversation";

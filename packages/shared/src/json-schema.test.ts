@@ -76,7 +76,7 @@ describe("published core JSON Schemas", () => {
 
   it("has a stable canonical publication hash", () => {
     expect(hashValue(coreJsonSchemaBundle)).toBe(
-      "9b80a753e78fb34c492b5df0d7b5c30a1cc7e42c6b32be2af6902f5231605611",
+      "12e95d616ab76bf146f023972980d6eb1120023b743443e7cb3136b0fbb19f91",
     );
   });
 });

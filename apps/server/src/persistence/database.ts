@@ -4773,6 +4773,169 @@ BEFORE DELETE ON investment_distribution_allocations
 BEGIN SELECT RAISE(ABORT, 'investment distribution allocations are immutable'); END;
 `;
 
+const PHASE_12_AGENT_LAB = `
+CREATE TABLE agent_lab_trials (
+  run_id TEXT PRIMARY KEY REFERENCES simulation_runs(id),
+  protocol_version TEXT NOT NULL CHECK (protocol_version = 'wt.agent-lab.v1'),
+  study_id TEXT NOT NULL,
+  trial_id TEXT NOT NULL,
+  experiment_manifest_digest TEXT NOT NULL CHECK (
+    length(experiment_manifest_digest) = 64 AND
+    experiment_manifest_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  mode TEXT NOT NULL CHECK (mode IN ('native', 'shadow', 'external')),
+  config_canonical TEXT NOT NULL,
+  externally_influenced INTEGER NOT NULL DEFAULT 0 CHECK (externally_influenced IN (0, 1)),
+  tainted INTEGER NOT NULL DEFAULT 0 CHECK (tainted IN (0, 1)),
+  taint_canonical TEXT NOT NULL DEFAULT '{"reasons":[],"tainted":false}',
+  created_wall TEXT NOT NULL,
+  UNIQUE (study_id, trial_id, run_id)
+);
+
+CREATE TABLE agent_lab_credentials (
+  run_id TEXT NOT NULL REFERENCES agent_lab_trials(run_id),
+  credential_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL CHECK (
+    length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  agent_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('shadow', 'external')),
+  scopes_canonical TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  created_wall TEXT NOT NULL,
+  revoked_wall TEXT,
+  last_used_wall TEXT,
+  PRIMARY KEY (run_id, credential_id),
+  UNIQUE (token_hash),
+  FOREIGN KEY (run_id, agent_id) REFERENCES agents(run_id, id)
+);
+CREATE UNIQUE INDEX agent_lab_credentials_one_active
+  ON agent_lab_credentials(run_id, agent_id)
+  WHERE status = 'active';
+
+CREATE TABLE agent_lab_turns (
+  run_id TEXT NOT NULL REFERENCES agent_lab_trials(run_id),
+  turn_id TEXT NOT NULL,
+  trial_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  controller TEXT NOT NULL CHECK (controller IN ('shadow', 'external')),
+  opportunity_key TEXT NOT NULL,
+  completed_tick INTEGER NOT NULL CHECK (completed_tick >= 0),
+  target_tick INTEGER NOT NULL CHECK (target_tick = completed_tick + 1),
+  projection_hash TEXT NOT NULL CHECK (
+    length(projection_hash) = 64 AND projection_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  menu_hash TEXT NOT NULL CHECK (
+    length(menu_hash) = 64 AND menu_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  envelope_canonical TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'submitted', 'terminal')),
+  deadline_wall TEXT NOT NULL,
+  terminal_receipt_id TEXT,
+  created_wall TEXT NOT NULL,
+  updated_wall TEXT NOT NULL,
+  PRIMARY KEY (run_id, turn_id),
+  UNIQUE (run_id, opportunity_key),
+  FOREIGN KEY (run_id, agent_id) REFERENCES agents(run_id, id)
+);
+CREATE INDEX agent_lab_turns_agent_status
+  ON agent_lab_turns(run_id, agent_id, status, target_tick, turn_id);
+
+CREATE TABLE agent_lab_submissions (
+  run_id TEXT NOT NULL,
+  submission_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  submission_canonical TEXT NOT NULL,
+  accepted INTEGER NOT NULL CHECK (accepted IN (0, 1)),
+  receipt_id TEXT NOT NULL,
+  created_wall TEXT NOT NULL,
+  PRIMARY KEY (run_id, submission_id),
+  UNIQUE (run_id, turn_id, idempotency_key),
+  UNIQUE (run_id, receipt_id),
+  FOREIGN KEY (run_id, turn_id) REFERENCES agent_lab_turns(run_id, turn_id),
+  FOREIGN KEY (run_id, credential_id)
+    REFERENCES agent_lab_credentials(run_id, credential_id)
+);
+CREATE UNIQUE INDEX agent_lab_submissions_one_accepted
+  ON agent_lab_submissions(run_id, turn_id)
+  WHERE accepted = 1;
+
+CREATE TABLE agent_lab_receipts (
+  run_id TEXT NOT NULL,
+  receipt_id TEXT NOT NULL,
+  submission_id TEXT,
+  turn_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  target_tick INTEGER NOT NULL CHECK (target_tick >= 1),
+  status TEXT NOT NULL CHECK (
+    status IN ('shadowed', 'queued', 'applied', 'rejected', 'stale', 'fallback')
+  ),
+  receipt_canonical TEXT NOT NULL,
+  created_wall TEXT NOT NULL,
+  completed_wall TEXT,
+  PRIMARY KEY (run_id, receipt_id),
+  UNIQUE (run_id, submission_id),
+  FOREIGN KEY (run_id, turn_id) REFERENCES agent_lab_turns(run_id, turn_id),
+  FOREIGN KEY (run_id, agent_id) REFERENCES agents(run_id, id)
+);
+CREATE INDEX agent_lab_receipts_turn
+  ON agent_lab_receipts(run_id, turn_id, status, receipt_id);
+
+CREATE TABLE agent_lab_taint_records (
+  run_id TEXT NOT NULL REFERENCES agent_lab_trials(run_id),
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  code TEXT NOT NULL CHECK (
+    code IN ('manual_input', 'manifest_drift', 'unmanifested_intervention', 'artifact_corrupt')
+  ),
+  detail TEXT NOT NULL,
+  recorded_wall TEXT NOT NULL,
+  PRIMARY KEY (run_id, sequence)
+);
+
+CREATE TABLE agent_lab_tool_calls (
+  run_id TEXT NOT NULL REFERENCES agent_lab_trials(run_id),
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  agent_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL CHECK (
+    tool_name IN (
+      'wt_identity_get', 'wt_turn_wait', 'wt_action_submit', 'wt_receipt_get'
+    )
+  ),
+  turn_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('ok', 'error')),
+  called_wall TEXT NOT NULL,
+  PRIMARY KEY (run_id, sequence),
+  FOREIGN KEY (run_id, agent_id) REFERENCES agents(run_id, id)
+);
+CREATE INDEX agent_lab_tool_calls_agent
+  ON agent_lab_tool_calls(run_id, agent_id, sequence);
+
+CREATE TABLE replay_agent_lab_submissions (
+  run_id TEXT NOT NULL REFERENCES replay_runs(run_id),
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  request_hash TEXT NOT NULL CHECK (
+    length(request_hash) = 64 AND request_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  source_event_id TEXT NOT NULL,
+  proposal_digest TEXT NOT NULL CHECK (
+    length(proposal_digest) = 64 AND proposal_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  proposal_canonical TEXT NOT NULL,
+  PRIMARY KEY (run_id, ordinal),
+  UNIQUE (run_id, source_event_id)
+);
+CREATE INDEX replay_agent_lab_submissions_request
+  ON replay_agent_lab_submissions(run_id, request_hash, ordinal);
+CREATE TRIGGER replay_agent_lab_submissions_no_update
+BEFORE UPDATE ON replay_agent_lab_submissions
+BEGIN SELECT RAISE(ABORT, 'replay Agent Lab submissions are immutable'); END;
+CREATE TRIGGER replay_agent_lab_submissions_no_delete
+BEFORE DELETE ON replay_agent_lab_submissions
+BEGIN SELECT RAISE(ABORT, 'replay Agent Lab submissions are immutable'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -4917,6 +5080,11 @@ const MIGRATIONS: readonly Migration[] = [
     version: 34,
     name: "phase_8_investment_distributions",
     sql: PHASE_8_INVESTMENT_DISTRIBUTIONS,
+  },
+  {
+    version: 35,
+    name: "phase_12_agent_lab",
+    sql: PHASE_12_AGENT_LAB,
   },
 ];
 

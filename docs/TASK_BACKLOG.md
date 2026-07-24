@@ -440,10 +440,39 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 ---
 
-**Totals:** 7 (P0) + 10 (P1) + 9 (P2) + 10 (P3) + 9 (P4) + 8 (P5) + 10 (P6) + 10 (P7) + 5 (P8) + 5 (P9) + 4 (P10) + 6 (P11) = **93 tasks.**
+## Phase 12 — Agent laboratory and realism harness [Research]
 
-Current boundary (2026-07-24): **78 complete**, **0 in progress**, and **15 not started** (WS-901–1106). Phase 8 is accepted; WS-901 is the next planned ticket.
+### WS-1201 — Agent Lab contracts and cohort routing `M04/M21` · `backend` · `L` · deps: WS-1106 · Ind? no
 
-Citizen tools, connectors and real external accounts are deliberately outside
-all 93 tasks. After WS-1106, any self-hosted open-source provider-neutral tool
-system requires a separate discovery plan and explicit approval.
+**Status:** implemented on the Agent Lab feature branch. Optional scenario/run-manifest configuration, strict turn/submission/receipt/manifest/artifact/scorecard schemas, stable stratified cohort selection, and absence-preserving legacy manifests are covered.
+
+### WS-1202 — Scoped sidecar and loopback gateway `M20/M22` · `backend` · `L` · deps: WS-1201 · Ind? no
+
+**Status:** implemented on the Agent Lab feature branch. Migration 35 adds hash-neutral trial, hashed credential, turn, submission, receipt, taint, and MCP tool-call evidence. REST and Streamable HTTP MCP expose only identity, turn wait, action submit, and receipt reads with run/agent scopes, revocation, idempotency, private-data canaries, and closed unknown-field boundaries.
+
+### WS-1203 — Native, shadow, and external provider routing `M04/M21` · `backend` · `L` · deps: WS-1202 · Ind? no
+
+**Status:** implemented on the Agent Lab feature branch. Native behavior is unchanged; shadow evidence cannot mutate state; external proposals wait to a bounded deadline and then pass through the existing live-decision resolver, capability checks, action registry, and module executor. Recorded external causal inputs replay without Hermes/network access.
+
+### WS-1204 — Isolated Hermes study harness `M26` · `tooling` · `L` · deps: WS-1203 · Ind? no
+
+**Status:** implemented on the Agent Lab feature branch. `lab:init`, `lab:run`, `lab:verify`, `lab:report`, and `gate:agent-lab` pin and check engine/dependency/prompt/tool bytes, isolate profiles/ports/databases, sanitize artifacts, verify checksums, reject prior state, track taint, and report separate evidence vectors.
+
+### WS-1205 — Real-Hermes matched pilot `M26` · `acceptance` · `L` · deps: WS-1204 · Ind? no
+
+**Status:** not run. Execute the manifested three-seed, 60-tick, eight-citizen matrix with one native, three shadow, and three external attempts per seed. Every receipt must terminate; active invariants and authorization gates must pass; strict offline replay must have zero divergences; tainted trials are excluded.
+
+### WS-1206 — Measured realism conditions `M02/M04/M15/M26` · `backend+research` · `XL` · deps: WS-1205 · Ind? no
+
+**Status:** partial observation implemented; later conditions are deliberately gated. Add daily commitments, structured plans, cited weekly reflection, numeric expectations, and relationship-mediated diffusion one manifested condition at a time with deterministic submodels, counterfactual fixtures, ODD documentation, and vector metrics.
+
+---
+
+**Pre-Phase-12 totals:** 7 (P0) + 10 (P1) + 9 (P2) + 10 (P3) + 9 (P4) + 8 (P5) + 10 (P6) + 10 (P7) + 5 (P8) + 5 (P9) + 4 (P10) + 6 (P11) = **93 tasks.** Phase 12 adds six research tickets.
+
+Current boundary (2026-07-24): the pre-Phase-12 roadmap stands at **78 complete**, **0 in progress**, and **15 not started** (WS-901–1106). Phase 8 is accepted and WS-901 is the next planned ticket. Within Phase 12, WS-1201–1204 have an implemented foundation, WS-1205 is an unrun release gate, and WS-1206 is intentionally staged after measurement.
+
+General-purpose citizen tools, arbitrary connectors, real external accounts,
+shell/browser/filesystem/delegation access, and real-money integration remain
+outside the roadmap. Phase 12 permits only its four loopback, trial-bound,
+menu-constrained WorldTangle tools.

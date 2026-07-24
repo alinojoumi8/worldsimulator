@@ -5,6 +5,7 @@ import type {
   RiverbendBaselineObservation,
 } from "@worldtangle/engine";
 import { auditM1Attribution } from "@worldtangle/engine";
+import { EngineError } from "@worldtangle/shared";
 import type { WorldDatabase } from "../persistence/database";
 import { toSafeNumber } from "../persistence/database";
 import { SqliteRunRepository } from "../persistence/run-repository";
@@ -24,12 +25,34 @@ interface TickRow {
   readonly tick: bigint;
 }
 
+interface AgentLabBaselineRow {
+  readonly externally_influenced: bigint;
+  readonly tainted: bigint;
+}
+
 export function readRiverbendBaselineObservation(
   db: WorldDatabase,
   runId: string,
 ): RiverbendBaselineObservation {
   const repository = new SqliteRunRepository(db);
   const run = repository.getRun(runId);
+  const agentLab = db.prepare<[string], AgentLabBaselineRow>(`
+    SELECT externally_influenced, tainted
+    FROM agent_lab_trials
+    WHERE run_id = ?
+  `).get(runId);
+  if (agentLab?.externally_influenced === 1n) {
+    throw new EngineError(
+      "PERMISSION_DENIED",
+      "externally influenced Agent Lab runs cannot replace the Riverbend release baseline",
+    );
+  }
+  if (agentLab?.tainted === 1n) {
+    throw new EngineError(
+      "PERMISSION_DENIED",
+      "tainted Agent Lab runs cannot replace the Riverbend release baseline",
+    );
+  }
   const simulation = repository.getSimulation(run.simulationId);
   const worldSpec = simulation.scenario["worldSpec"];
   if (typeof worldSpec !== "string") {

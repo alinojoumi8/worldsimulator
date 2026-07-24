@@ -8,7 +8,7 @@ This is the canonical index for the repository's documentation. Current-state do
 - [Local operations](LOCAL_OPERATIONS.md) — install, run, configure live providers, choose mock mode, and verify a run.
 - [Product requirements](PRD.md) — product scope, safety boundaries, use cases, and acceptance criteria.
 - [Implementation plan](IMPLEMENTATION_PLAN.md) — logical modules, phase gates, and remaining roadmap.
-- [Task backlog](TASK_BACKLOG.md) — all 93 tracked tickets and their live status.
+- [Task backlog](TASK_BACKLOG.md) — tracked tickets and their live status.
 - [API contracts](API_CONTRACTS.md) — implemented REST/SSE contracts plus clearly labelled planned routes.
 - [Domain model](DOMAIN_MODEL.md) — authoritative entity shapes, ownership boundaries, and workflows.
 - [Initial world](INITIAL_WORLD.md) — deterministic Riverbend population and calibration contract.
@@ -19,6 +19,8 @@ This is the canonical index for the repository's documentation. Current-state do
 - [Live provider contract](LIVE_PROVIDER_CONTRACT.md)
 - [Phase 3 finance](PHASE_3_FINANCE.md)
 - [Phase 4 foundations](PHASE_4_FOUNDATIONS.md)
+- [Phase 12 Agent Lab](PHASE_12_AGENT_LAB.md)
+- [Agent Lab ODD record](ODD_AGENT_LAB.md)
 - [Brand assets and export workflow](../design/brand/README.md)
 - [Brand generation prompts](../design/brand/PROMPTS.md)
 
@@ -81,6 +83,11 @@ This is the canonical index for the repository's documentation. Current-state do
 
 - [Guided causal test](USER_TESTING.md) — controlled mock pilot, tester brief,
   evidence states, receipt handoff, and known boundaries.
+
+### Phase 12 — Agent laboratory and realism harness
+
+- [Agent Lab architecture, operation, and gate](PHASE_12_AGENT_LAB.md)
+- [ODD study record](ODD_AGENT_LAB.md)
 
 ## Maintenance rule
 

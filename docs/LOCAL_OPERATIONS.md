@@ -64,3 +64,56 @@ pnpm build
 ```
 
 The explicitly authorized live acceptance commands also load `.env`, but require their separate confirmation variables. See [WS-609](WS_609_LIVE_BUDGET_ACCEPTANCE.md) and [WS-610](WS_610_LLM_PARITY.md); ordinary development does not imply consent for those acceptance runs.
+
+## Phase 12 Agent Lab
+
+The Agent Lab is a separate research workflow. Ordinary development, mock
+tests, and `gate:agent-lab` do not authorize provider spend or constitute the
+real-Hermes release pilot.
+
+From the exact clean commit to be studied, create a pinned manifest:
+
+```bash
+pnpm lab:init -- --out experiments/phase12-pilot.json \
+  --study-id phase12-pilot --model <hermes-provider-model> \
+  --provider-env <PROVIDER_API_KEY[,PROVIDER_BASE_URL]> \
+  --input-microcents-per-token <integer> \
+  --output-microcents-per-token <integer> \
+  --hermes-executable <absolute-path-if-not-on-PATH>
+```
+
+Review the generated prompt bytes, MCP schemas, cohort, interventions, model,
+integer microcents-per-token prices, budgets, attempts, commit, Node version,
+lockfile digest, Hermes/Python/SDK versions, and provider-environment name
+allowlist before authorizing the study. Use zero prices only for a genuinely
+free/local model. Ensure each allowlisted provider variable is available to the
+harness. Only those provider variables and basic OS runtime variables cross
+into an isolated Hermes process. Never place a credential value or an Agent Lab
+PAT in the manifest.
+
+Run into a new, empty study directory:
+
+```bash
+pnpm lab:run -- --manifest experiments/phase12-pilot.json \
+  --out artifacts/agent-lab/phase12-pilot
+```
+
+The executable defaults to `hermes`; use
+`--hermes-executable <absolute-path>` when necessary. The harness rejects a
+dirty checkout, commit/Node/lock/Hermes-runtime drift, a missing allowlisted
+provider variable, a non-loopback gateway, an enabled native Hermes toolset, or
+a nonempty study directory. `--allow-dirty` is a development escape hatch and
+its output must not be used as release evidence.
+
+Verify each trial and build the vector report:
+
+```bash
+pnpm lab:verify -- --artifact artifacts/agent-lab/phase12-pilot/trials/<trial-id>
+pnpm lab:report -- --study artifacts/agent-lab/phase12-pilot
+```
+
+The harness stops Hermes before strict replay and exports no raw credentials or
+hidden reasoning. A manual message, unmanifested intervention, artifact change,
+or prior/crashed state taints or invalidates the affected comparison. See
+[PHASE_12_AGENT_LAB.md](PHASE_12_AGENT_LAB.md) for the full boundary and
+[ODD_AGENT_LAB.md](ODD_AGENT_LAB.md) for the required study record.

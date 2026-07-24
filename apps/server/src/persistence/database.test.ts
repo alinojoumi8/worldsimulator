@@ -68,7 +68,7 @@ describe("world database", () => {
     expect(
       db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations").get()
         ?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     db.close();
 
     const reopened = openWorldDatabase(dataDir, "sim_00000001", "run_00000001");
@@ -76,7 +76,7 @@ describe("world database", () => {
       reopened
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     reopened.close();
   });
 
@@ -95,7 +95,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     const triggerNames = upgraded
       .prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema
@@ -122,7 +122,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     expect(
       upgraded.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'api_tasks'
@@ -146,7 +146,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_response_cache'
@@ -175,7 +175,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     const names = upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name LIKE 'llm_%'
@@ -211,7 +211,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'llm_call_records'
@@ -275,7 +275,7 @@ describe("world database", () => {
     `).all().map((row) => row.name);
     upgraded.close();
 
-    expect(migrationCount).toBe(34n);
+    expect(migrationCount).toBe(35n);
     expect(tableNames).toEqual([
       "conversation_bindings",
       "conversation_inbox",
@@ -306,7 +306,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     expect(upgraded.prepare<[], { name: string }>(`
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'conversation_bindings'
@@ -344,7 +344,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -373,7 +373,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -411,7 +411,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -456,7 +456,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -532,7 +532,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -565,6 +565,7 @@ describe("world database", () => {
       WHERE type = 'table' AND name LIKE 'replay_%'
       ORDER BY name
     `).all().map((row) => row.name)).toEqual([
+      "replay_agent_lab_submissions",
       "replay_divergences",
       "replay_llm_expectations",
       "replay_runs",
@@ -573,7 +574,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -602,7 +603,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -637,7 +638,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -773,7 +774,7 @@ describe("world database", () => {
       upgraded
         .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM schema_migrations")
         .get()?.count,
-    ).toBe(34n);
+    ).toBe(35n);
     upgraded.close();
   });
 
@@ -966,7 +967,7 @@ describe("world database", () => {
     expect(upgraded.pragma("foreign_key_check")).toEqual([]);
     expect(upgraded.prepare<[], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM schema_migrations
-    `).get()?.count).toBe(34n);
+    `).get()?.count).toBe(35n);
     upgraded.close();
 
     const reopened = openDatabaseFile(path);
@@ -1003,14 +1004,63 @@ describe("world database", () => {
     `).get()?.name).toBe("events_validate_investment_distribution");
     expect(upgraded.prepare<[], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM schema_migrations
-    `).get()?.count).toBe(34n);
+    `).get()?.count).toBe(35n);
     expect(upgraded.pragma("foreign_key_check")).toEqual([]);
     upgraded.close();
 
     const reopened = openDatabaseFile(path);
     expect(reopened.prepare<[], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM schema_migrations
-    `).get()?.count).toBe(34n);
+    `).get()?.count).toBe(35n);
+    expect(reopened.pragma("foreign_key_check")).toEqual([]);
+    reopened.close();
+  });
+
+  it("upgrades version-34 state with hash-neutral Agent Lab sidecar tables", () => {
+    const path = join(temporaryDirectory(), "agent-lab-upgrade.db");
+    const db = openDatabaseFile(path);
+    db.exec(`
+      DROP TABLE replay_agent_lab_submissions;
+      DROP TABLE agent_lab_tool_calls;
+      DROP TABLE agent_lab_receipts;
+      DROP TABLE agent_lab_submissions;
+      DROP TABLE agent_lab_taint_records;
+      DROP TABLE agent_lab_turns;
+      DROP TABLE agent_lab_credentials;
+      DROP TABLE agent_lab_trials;
+      DELETE FROM schema_migrations WHERE version = 35;
+    `);
+    db.close();
+
+    const upgraded = openDatabaseFile(path);
+    const names = upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name LIKE 'agent_lab_%'
+      ORDER BY name
+    `).all().map((row) => row.name);
+    expect(names).toEqual([
+      "agent_lab_credentials",
+      "agent_lab_receipts",
+      "agent_lab_submissions",
+      "agent_lab_taint_records",
+      "agent_lab_tool_calls",
+      "agent_lab_trials",
+      "agent_lab_turns",
+    ]);
+    expect(upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name = 'replay_agent_lab_submissions'
+    `).get()?.name).toBe("replay_agent_lab_submissions");
+    expect(upgraded.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM schema_migrations
+    `).get()?.count).toBe(35n);
+    expect(upgraded.pragma("foreign_key_check")).toEqual([]);
+    upgraded.close();
+
+    const reopened = openDatabaseFile(path);
+    expect(reopened.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM schema_migrations
+    `).get()?.count).toBe(35n);
     expect(reopened.pragma("foreign_key_check")).toEqual([]);
     reopened.close();
   });

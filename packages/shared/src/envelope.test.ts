@@ -92,7 +92,7 @@ describe("intentEnvelopeSchema", () => {
 
 describe("runManifestSchema", () => {
   it("accepts a valid manifest", () => {
-    const result = runManifestSchema.safeParse({
+    const manifest = {
       runId: "run_00000001",
       simulationId: "sim_00000001",
       seed: 42,
@@ -108,8 +108,13 @@ describe("runManifestSchema", () => {
       scenarioDigest: "abc123",
       worldSpecDigest: "def456",
       createdWall: "2026-07-14T00:00:00.000Z",
-    });
+    };
+    const result = runManifestSchema.safeParse(manifest);
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.hasOwn(result.data, "agentLab")).toBe(false);
+      expect(result.data).toEqual(manifest);
+    }
   });
 
   it("rejects unknown llm modes", () => {

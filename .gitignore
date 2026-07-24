@@ -4,6 +4,7 @@ coverage/
 playwright-report/
 test-results/
 data/
+.runtime/
 .env
 *.tsbuildinfo
 .DS_Store
