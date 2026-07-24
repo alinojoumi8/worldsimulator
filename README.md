@@ -10,7 +10,7 @@ An AI-driven economic and social world simulator: a deterministic economic engin
 WS-610 acceptance artifacts; it rejects missing, malformed, tampered or
 semantically inconsistent evidence.
 
-Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. V1 is active: WS-801 through WS-804 are complete, and WS-805's contract-backed investment read API is in progress; its browser explorer and Phase 8 acceptance gate remain open. See the [project status](docs/PROJECT_STATUS.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap). External citizen tools and connector dependencies remain outside the roadmap through WS-1106.
+Phases 0–8 are complete: the MVP is accepted through WS-710 and the investment experience through WS-805. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, venture-investment, exact-cap-table, causal-evidence, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. See the [project status](docs/PROJECT_STATUS.md), [guided tester brief](docs/USER_TESTING.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap). External citizen tools and connector dependencies remain outside the roadmap through WS-1106.
 
 ## Documentation
 
@@ -18,6 +18,7 @@ Phases 0–7 are complete and the MVP is accepted through WS-710. The exact seed
 |---|---|
 | [docs/README.md](docs/README.md) | Complete documentation index, status labels, and document ownership |
 | [docs/PRD.md](docs/PRD.md) | Product requirements: vision, use cases, functional/non-functional requirements, MVP definition, acceptance criteria |
+| [docs/USER_TESTING.md](docs/USER_TESTING.md) | Controlled guided-test script, evidence states, feedback capture, and release boundaries |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 26-module architecture + phased roadmap (Phases 0–11) |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | REST + SSE contracts, versioned event catalog |
 | [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Entity catalog, state machines, workflow diagrams |
@@ -84,7 +85,7 @@ an existing repository-root `.env`. The file is git-ignored, provider keys stay
 server-side, and both acceptance commands still require their explicit live-consent
 values. Test and gate commands do not auto-load `.env`.
 
-During development, Vite proxies `/api` to port 4000. For production-style local use, run `pnpm build && pnpm start`. Mock runs need no provider configuration. The dashboard create form defaults to live `MiniMax-M3` with a 128,000-token per-agent daily guardrail, but mock mode remains selectable for offline deterministic runs. A live run needs a configured MiniMax key; changing `.env` never changes an already-created run's pinned manifest, so create a new run when switching modes. If `WORLDTANGLE_API_TOKEN` is set, enter it through the dashboard's **API token** control; it is kept in `sessionStorage`, not persistent browser storage. See [local operations](docs/LOCAL_OPERATIONS.md) for the exact verification path.
+During development, Vite proxies `/api` to port 4000. For production-style local use, run `pnpm build && pnpm start`. The first-run dashboard path is a 31-tick, seed-42 guided mock experiment, so it needs no provider configuration or usage cost. Custom runs retain the 360-tick baseline; live `MiniMax-M3` remains an advanced opt-in choice. A live run needs a configured MiniMax key; changing `.env` never changes an already-created run's pinned manifest, so create a new run when switching modes. If `WORLDTANGLE_API_TOKEN` is set, enter it through the dashboard's **API token** control; it is kept in `sessionStorage`, not persistent browser storage. See the [guided user-testing brief](docs/USER_TESTING.md) and [local operations](docs/LOCAL_OPERATIONS.md).
 
 Create and inspect a short simulation:
 

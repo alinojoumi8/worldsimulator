@@ -9,6 +9,13 @@ import { WorldExplorerPage } from "./pages/world-explorer-page";
 import { ConversationDetailPage, ObservabilityPage } from "./pages/observability-page";
 import { NewsExplorerPage } from "./pages/news-explorer-page";
 import {
+  InvestmentCapTablePage,
+  InvestmentDetailPage,
+  InvestmentDistributionDetailPage,
+  InvestmentExplorerPage,
+  InvestmentProposalDetailPage,
+} from "./pages/investment-pages";
+import {
   AgentDetailPage,
   BankDetailPage,
   CompanyDetailPage,
@@ -56,10 +63,15 @@ export function App() {
               <Route path="/simulations/:simId/world/jobs" element={<WorldExplorerPage section="jobs" />} />
               <Route path="/simulations/:simId/world/contracts" element={<WorldExplorerPage section="contracts" />} />
               <Route path="/simulations/:simId/world/institutions" element={<WorldExplorerPage section="institutions" />} />
+              <Route path="/simulations/:simId/world/investments" element={<InvestmentExplorerPage />} />
               <Route path="/simulations/:simId/world/market" element={<WorldExplorerPage section="market" />} />
               <Route path="/simulations/:simId/world/credit" element={<WorldExplorerPage section="credit" />} />
               <Route path="/simulations/:simId/world/agents" element={<WorldExplorerPage section="agents" />} />
               <Route path="/simulations/:simId/companies/:companyId" element={<CompanyDetailPage />} />
+              <Route path="/simulations/:simId/companies/:companyId/cap-table" element={<InvestmentCapTablePage />} />
+              <Route path="/simulations/:simId/investment-proposals/:proposalId" element={<InvestmentProposalDetailPage />} />
+              <Route path="/simulations/:simId/investments/:investmentId" element={<InvestmentDetailPage />} />
+              <Route path="/simulations/:simId/investment-distributions/:distributionId" element={<InvestmentDistributionDetailPage />} />
               <Route path="/simulations/:simId/contracts/:contractId" element={<ContractDetailPage />} />
               <Route path="/simulations/:simId/jobs/:jobId" element={<JobDetailPage />} />
               <Route path="/simulations/:simId/institutions/:institutionId" element={<InstitutionDetailPage />} />

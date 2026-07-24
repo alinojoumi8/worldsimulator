@@ -11,6 +11,7 @@ import { AlertTriangle, Zap } from "lucide-react";
 interface WorldEventInjectorProps {
   readonly runId?: string;
   readonly runStatus?: string;
+  readonly guided?: boolean;
   readonly pending: boolean;
   readonly failure?: string;
   readonly receipt?: InjectWorldEventResponse;
@@ -20,6 +21,7 @@ interface WorldEventInjectorProps {
 export function WorldEventInjector({
   runId,
   runStatus,
+  guided = false,
   pending,
   failure,
   receipt,
@@ -31,7 +33,7 @@ export function WorldEventInjector({
   const [durationTicks, setDurationTicks] = useState("30");
   const [companyId, setCompanyId] = useState("cmp_00000001");
   const [capacityReductionPct, setCapacityReductionPct] = useState("50");
-  const canInject = runId !== undefined && runStatus === "paused";
+  const canInject = runId !== undefined && (runStatus === "created" || runStatus === "paused");
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -64,23 +66,37 @@ export function WorldEventInjector({
   };
 
   return (
-    <section className="world-event-injector" aria-labelledby="world-event-heading">
+    <section
+      className="world-event-injector"
+      id="intervention"
+      aria-labelledby="world-event-heading"
+    >
       <div className="world-event-injector__heading">
         <div>
           <p className="eyebrow"><Zap size={15} /> Bounded intervention</p>
-          <h2 id="world-event-heading">Inject a world event</h2>
+          <h2 id="world-event-heading">
+            {guided ? "Step 1 · Schedule the fuel-price shock" : "Inject a world event"}
+          </h2>
         </div>
         <span className="scenario-chip">Approved catalog only</span>
       </div>
       <p>
-        Schedule a validated shock at the next tick boundary. The command, effect, and every
-        downstream change remain in the causal ledger.
+        {guided
+          ? "Use the approved 30% test shock. It applies at the next tick and leaves a durable causal thread."
+          : "Schedule a validated shock at the next tick boundary. The command, effect, and every downstream change remain in the causal ledger."}
       </p>
+      <dl className="intervention-safety">
+        <div><dt>Owner</dt><dd>Tester</dd></div>
+        <div><dt>Prerequisite</dt><dd>Created or paused run</dd></div>
+        <div><dt>Blast radius</dt><dd>Simulated Riverbend only</dd></div>
+        <div><dt>Expected signals</dt><dd>Applied event · fuel price · CPI</dd></div>
+      </dl>
       <form onSubmit={submit}>
         <label htmlFor="world-event-type">World event</label>
         <select
           id="world-event-type"
           value={type}
+          disabled={guided}
           onChange={(event) => setType(event.target.value as WorldEventType)}
         >
           <option value="energy.fuel_price_shock">Energy · fuel price shock</option>
@@ -132,6 +148,7 @@ export function WorldEventInjector({
               max={type === "energy.fuel_price_shock" ? 1_000 : 500}
               step="1"
               required
+              readOnly={guided}
               value={deltaPct}
               onChange={(event) => setDeltaPct(event.target.value)}
             />
@@ -160,7 +177,7 @@ export function WorldEventInjector({
       <p className="world-event-injector__boundary" role="note">
         {canInject
           ? "Ready: the event will apply at the next committed tick boundary."
-          : "Pause the run before scheduling an intervention."}
+          : "Create or pause the run before scheduling an intervention."}
       </p>
       {failure === undefined ? null : (
         <p className="world-event-injector__failure" role="alert">

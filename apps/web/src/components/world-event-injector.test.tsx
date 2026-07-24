@@ -41,7 +41,7 @@ describe("WorldEventInjector", () => {
     });
   });
 
-  it("requires a paused run and exposes typed success evidence", () => {
+  it("allows created or paused runs and exposes typed success evidence", () => {
     const { rerender } = render(
       <WorldEventInjector
         runId="run_00000001"
@@ -52,7 +52,19 @@ describe("WorldEventInjector", () => {
     );
     expect((screen.getByRole("button", { name: "Schedule event" }) as HTMLButtonElement).disabled)
       .toBe(true);
-    expect(screen.getByText("Pause the run before scheduling an intervention.")).toBeTruthy();
+    expect(screen.getByText("Create or pause the run before scheduling an intervention."))
+      .toBeTruthy();
+
+    rerender(
+      <WorldEventInjector
+        runId="run_00000001"
+        runStatus="created"
+        pending={false}
+        onInject={vi.fn()}
+      />,
+    );
+    expect((screen.getByRole("button", { name: "Schedule event" }) as HTMLButtonElement).disabled)
+      .toBe(false);
 
     rerender(
       <WorldEventInjector
@@ -85,5 +97,29 @@ describe("WorldEventInjector", () => {
     );
     expect(screen.getByRole("status").textContent)
       .toContain("energy.fuel_price_shock scheduled for tick 1");
+  });
+
+  it("locks the guided fixture to the approved 30% fuel shock", () => {
+    const onInject = vi.fn();
+    render(
+      <WorldEventInjector
+        runId="run_00000001"
+        runStatus="created"
+        guided
+        pending={false}
+        onInject={onInject}
+      />,
+    );
+
+    expect((screen.getByLabelText("World event") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Fuel price change (%)") as HTMLInputElement).readOnly)
+      .toBe(true);
+    expect(screen.getByText("Applied event · fuel price · CPI")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule event" }));
+    expect(onInject).toHaveBeenCalledWith({
+      runId: "run_00000001",
+      type: "energy.fuel_price_shock",
+      params: { deltaPct: 30 },
+    });
   });
 });

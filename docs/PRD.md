@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Approved v1.0 baseline — MVP accepted through WS-710; V1 active at WS-805 |
-| **Date** | 2026-07-18 |
+| **Status** | Approved v1.0 baseline — MVP and Phase 8 accepted through WS-805 |
+| **Date** | 2026-07-24 |
 | **Owners** | Project owner + engineering |
 | **Related docs** | [PROJECT_STATUS.md](PROJECT_STATUS.md) · [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · [API_CONTRACTS.md](API_CONTRACTS.md) · [DOMAIN_MODEL.md](DOMAIN_MODEL.md) · [INITIAL_WORLD.md](INITIAL_WORLD.md) · [TASK_BACKLOG.md](TASK_BACKLOG.md) · [adr/](adr/README.md) |
 
@@ -55,8 +55,15 @@ There is no accessible environment where a researcher or curious builder can wat
 
 No multi-tenant public product is in scope before LATER. Authentication remains minimal until then (see §22, ADR-0011).
 
+Controlled design-partner testing may include mixed curious users. That cohort
+validates whether one bounded causal experiment is understandable; it does not
+expand the product into a multi-tenant public service. First-session testing
+uses deterministic mock mode, a fixed seed, a short run, and an explicit
+simulated-scenario disclaimer.
+
 ## 5. Primary use cases
 
+- **UC-0 [MVP] Complete a guided causal test.** Start the recommended mock fixture without credentials, schedule one approved fuel-price shock, follow the intervention into a committed state and CPI observation, reload without losing the next step, and copy a reproducibility receipt.
 - **UC-1 [MVP] Run a baseline world.** Create a simulation from the default Riverbend scenario, run 360 simulated days, watch the dashboard update per tick.
 - **UC-2 [MVP] Observe an agent's life.** Open an agent profile; see persona, job, balances, relationships, recent decisions with reasons, conversations, and memory highlights.
 - **UC-3 [MVP] Trace a business story.** An agent founds a café: see the founding decision, the legal registration contract, the bank account, the loan application and the officer's assessment, hiring, revenue, and either survival or failure — each step linked to its audit events.

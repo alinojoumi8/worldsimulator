@@ -412,7 +412,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 ### WS-804 — Distributions `M10` · `backend` · `S` · deps: WS-803 · Ind? yes — **Do:** pro-rata dividends (largest remainder). **Accept:** exactness property. **Tests:** allocation tests.
 **Status:** implemented. Current ownership stakes are aggregated by beneficial owner, sorted by canonical holder kind/id, and split with the shared largest-remainder primitive so every positive integer-cent dividend is allocated exactly and independently of input/database order. Migration 34 adds immutable distribution/allocation journals whose triggers cross-check the historical cap table, active recipient accounts, exact domestic `dividend` transaction, and typed request/completion events. Unfunded or unroutable distributions fail before consuming IDs; duplicate references are idempotent. Logical state-hash v26, property/golden tests, tamper guards, migration upgrade/reopen, atomic rollback, and snapshot restore-equivalence are covered. See [WS-804 evidence](WS_804_INVESTMENT_DISTRIBUTIONS.md).
 ### WS-805 — Investment API + UI `M22/M23` · `backend+frontend` · `M` · deps: WS-803 · Ind? no — **Do:** proposals/investments endpoints, cap-table + transcript UI. **Accept:** UC-8 explorable. **Tests:** contract + component.
-**Status:** in progress. Strict shared contracts and read-only list/detail routes now expose proposals, investments, generalized company cap tables, and distributions with run-bound cursors, resolved identities, exact term/cap-table diffs, transcript summaries, and causal why-records. The generalized company-detail contract accepts discriminated agent or venture-fund holders. React pages/navigation, component/browser coverage, and the default-world Phase 8 explorable-close gate are still required before this ticket is complete. See [WS-805 progress](WS_805_INVESTMENT_EXPLORER.md).
+**Status:** implemented. Strict shared contracts, typed client methods, and read-only list/detail routes expose proposals, investments, generalized company cap tables, and distributions with run-bound cursors, resolved identities, exact term/cap-table diffs, transcript summaries, and causal why-records. The React Investment Explorer links proposal, booked investment, before/after dilution, current ownership, and distribution records. A shared three-lane evidence path reports explicit `booked`, `pending`, `no_effect`, and `broken_link` states without inferring causality from correlation alone. Component coverage and the production-shaped default seed-42, 360-tick Chromium gate make two negotiated closes explorable. See [WS-805 evidence](WS_805_INVESTMENT_EXPLORER.md).
 
 ## Phase 9 — Securities market [V1]
 
@@ -442,7 +442,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 **Totals:** 7 (P0) + 10 (P1) + 9 (P2) + 10 (P3) + 9 (P4) + 8 (P5) + 10 (P6) + 10 (P7) + 5 (P8) + 5 (P9) + 4 (P10) + 6 (P11) = **93 tasks.**
 
-Current boundary (2026-07-18): **77 complete**, **1 in progress** (WS-805), and **15 not started** (WS-901–1106). Phase 9 must not begin until WS-805 and the Phase 8 gate are complete.
+Current boundary (2026-07-24): **78 complete**, **0 in progress**, and **15 not started** (WS-901–1106). Phase 8 is accepted; WS-901 is the next planned ticket.
 
 Citizen tools, connectors and real external accounts are deliberately outside
 all 93 tasks. After WS-1106, any self-hosted open-source provider-neutral tool

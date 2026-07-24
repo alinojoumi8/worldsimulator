@@ -60,6 +60,17 @@ function createService(): SimulationApi {
     listInvestments: vi.fn(() => ({ items: [], nextCursor: null })),
     getInvestment: vi.fn(() => ({ investment: { id: "inv_00000001" } })),
     getInvestmentCapTable: vi.fn(() => ({ capTable: { company: { id: "co_00000001" } } })),
+    getEvidencePath: vi.fn((_simId, correlationId) => ({
+      correlationId,
+      origin: { state: "booked", label: "Origin event", explanation: "Stored.", items: [] },
+      booked: { state: "pending", label: "Booked state", explanation: "Pending.", items: [] },
+      downstream: {
+        state: "pending",
+        label: "Downstream effect",
+        explanation: "Pending.",
+        items: [],
+      },
+    })),
     listInvestmentDistributions: vi.fn(() => ({ items: [], nextCursor: null })),
     getInvestmentDistribution: vi.fn(() => ({ distribution: { id: "dist_00000001" } })),
     listContracts: vi.fn(() => ({ items: [], nextCursor: null })),
@@ -231,6 +242,7 @@ describe("simulation routes", () => {
     const investmentId = "inv_00000001";
     const fundId = "vfund_00000001";
     const distributionId = "dist_00000001";
+    const correlationId = "world-event:wev_00000001";
     const responses = await Promise.all([
       app.inject({
         method: "GET",
@@ -259,6 +271,10 @@ describe("simulation routes", () => {
       app.inject({
         method: "GET",
         url: `/api/v1/simulations/${simulationId}/investment-distributions/${distributionId}?runId=${runId}`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/simulations/${simulationId}/evidence-paths/${encodeURIComponent(correlationId)}?runId=${runId}`,
       }),
     ]);
 
@@ -290,6 +306,11 @@ describe("simulation routes", () => {
     expect(service.getInvestmentDistribution).toHaveBeenCalledWith(
       simulationId,
       distributionId,
+      runId,
+    );
+    expect(service.getEvidencePath).toHaveBeenCalledWith(
+      simulationId,
+      correlationId,
       runId,
     );
     for (const response of responses) {

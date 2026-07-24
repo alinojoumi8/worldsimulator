@@ -28,28 +28,32 @@ describe("WorldTangle app shell", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the real-data library with documented create defaults", async () => {
+  it("renders the guided mock pilot with advanced settings collapsed", async () => {
     render(<App />);
     expect(await screen.findByText("No worlds on the ledger yet.")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Create a simulation" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Guided causal test" })).toBeTruthy();
     expect((screen.getByLabelText("Simulation name") as HTMLInputElement).value)
-      .toBe("Riverbend baseline");
+      .toBe("Guided fuel-shock test");
     expect((screen.getByLabelText("Seed") as HTMLInputElement).value).toBe("42");
-    expect((screen.getByLabelText("End tick") as HTMLInputElement).value).toBe("360");
-    expect((screen.getByLabelText("LLM mode") as HTMLSelectElement).value).toBe("live");
+    expect((screen.getByLabelText("End tick") as HTMLInputElement).value).toBe("31");
+    const decisionMode = screen.getByLabelText("Decision mode") as HTMLSelectElement;
+    expect(decisionMode.value).toBe("mock");
+    expect(decisionMode.disabled).toBe(true);
     expect((screen.getByLabelText("Agent tokens · daily") as HTMLInputElement).value)
       .toBe("128000");
-    expect(screen.getByText("Tier-2 decisions call MiniMax M3 and count against the run budget."))
+    expect(screen.getByText(/fixed to deterministic mock decisions/i))
       .toBeTruthy();
+    expect(screen.getByText("Advanced reproducibility and budget")).toBeTruthy();
+    expect(screen.getByText(/Schedule one 30% fuel-price shock/i)).toBeTruthy();
     expect(screen.getByText(/not financial, legal, or political advice/i)).toBeTruthy();
   });
 
-  it("submits new Riverbend simulations in live MiniMax mode by default", async () => {
+  it("submits guided Riverbend simulations in deterministic mock mode by default", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
     await screen.findByText("No worlds on the ledger yet.");
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Riverbend run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start guided causal test" }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true);
@@ -57,7 +61,8 @@ describe("WorldTangle app shell", () => {
     const createCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
     expect(createCall).toBeDefined();
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
-      scenario: { llmMode: "live" },
+      name: "Guided fuel-shock test",
+      scenario: { seed: 42, endTick: 31, llmMode: "mock" },
     });
   });
 

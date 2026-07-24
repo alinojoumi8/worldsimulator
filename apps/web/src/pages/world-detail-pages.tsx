@@ -57,6 +57,12 @@ export function CompanyDetailPage() {
                   <div><dt>Incorporation</dt><dd><Link to={`/simulations/${simId}/contracts/${query.data.company.incorporationContractId}`}>{query.data.company.incorporationContractId}</Link></dd></div>
                   {query.data.capTable.map((stake) => <div key={stake.holder.id}><dt>{stake.holder.name}</dt><dd>{stake.shares} shares · {(stake.ownershipBp / 100).toFixed(2)}%</dd></div>)}
                 </dl>
+                <Link
+                  className="button button--secondary"
+                  to={`/simulations/${simId}/companies/${query.data.company.id}/cap-table`}
+                >
+                  Open exact investment cap table
+                </Link>
               </section>
               <section className="entity-panel">
                 <h2>Solvency why-panel</h2>
@@ -151,6 +157,11 @@ export function InstitutionDetailPage() {
       {query.data === undefined ? null : <>
         <header className="entity-heading"><div><p className="eyebrow"><Landmark size={16} /> {query.data.institution.kind.replaceAll("_", " ")}</p><h1>{query.data.institution.name}</h1></div><span className="kind-chip">{query.data.institution.staffCount} staff</span></header>
         <div className="entity-two-column"><section className="entity-panel"><h2>Officeholders</h2>{query.data.officeholders.map((holder) => <div className="entity-row" key={`${holder.role}:${holder.agent.id}`}><UserRound size={17} /><div><Link to={`/simulations/${simId}/agents/${holder.agent.id}`}>{holder.agent.name}</Link><span>{holder.role}</span></div></div>)}</section><section className="entity-panel"><h2>Key figures</h2><pre>{JSON.stringify(query.data.institution.keyFigures, null, 2)}</pre></section></div>
+        {query.data.institution.kind === "vc_firm" ? (
+          <Link className="button button--secondary" to={`/simulations/${simId}/world/investments`}>
+            Open proposal, investment, and cap-table evidence
+          </Link>
+        ) : null}
         <section className="entity-panel"><h2>Public rulebook</h2><pre>{JSON.stringify(query.data.rulebook, null, 2)}</pre><p className="rulebook-note">Institutions are engine-side rule systems. Officeholders may exercise only the bounded authority shown here.</p></section>
       </>}
     </section></div>

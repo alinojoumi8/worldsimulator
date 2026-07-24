@@ -16,6 +16,7 @@ import {
   createExportRequestSchema,
   createSimulationRequestSchema,
   EngineError,
+  evidencePathPathSchema,
   eventListQuerySchema,
   errorListQuerySchema,
   exportPathSchema,
@@ -158,6 +159,11 @@ export interface SimulationApi {
   getInvestmentCapTable(
     simulationId: string,
     companyId: string,
+    runId?: string,
+  ): MaybePromise<ApiBody>;
+  getEvidencePath(
+    simulationId: string,
+    correlationId: string,
     runId?: string,
   ): MaybePromise<ApiBody>;
   listInvestmentDistributions(
@@ -375,6 +381,16 @@ export function registerSimulationRoutes(
       const { simId, companyId } = validate(investmentCapTablePathSchema, request.params);
       const { runId } = validate(investmentRunQuerySchema, request.query);
       const body = await service.getInvestmentCapTable(simId, companyId, runId);
+      return reply.code(200).send(withMeta(body));
+    },
+  );
+
+  app.get(
+    "/api/v1/simulations/:simId/evidence-paths/:correlationId",
+    async (request, reply) => {
+      const { simId, correlationId } = validate(evidencePathPathSchema, request.params);
+      const { runId } = validate(investmentRunQuerySchema, request.query);
+      const body = await service.getEvidencePath(simId, correlationId, runId);
       return reply.code(200).send(withMeta(body));
     },
   );

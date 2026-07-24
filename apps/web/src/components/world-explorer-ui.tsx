@@ -10,6 +10,7 @@ export type WorldSection =
   | "jobs"
   | "contracts"
   | "institutions"
+  | "investments"
   | "market"
   | "credit"
   | "agents";
@@ -19,6 +20,7 @@ const SECTIONS: readonly { readonly id: WorldSection; readonly label: string }[]
   { id: "jobs", label: "Jobs" },
   { id: "contracts", label: "Contracts" },
   { id: "institutions", label: "Institutions" },
+  { id: "investments", label: "Investments" },
   { id: "market", label: "Goods market" },
   { id: "credit", label: "Credit" },
   { id: "agents", label: "Citizens" },

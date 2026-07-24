@@ -175,6 +175,17 @@ For `why.kind=opening_seed`, the response contains only stored seasoned-month/mi
 
 ### 2.7 Investments & contracts
 
+**GET `/simulations/{simId}/evidence-paths/{correlationId}`** — Query:
+`runId?`. Read-only three-lane causal projection:
+`{correlationId,origin,booked,downstream,meta}`. Each lane contains
+`{state,label,explanation,items}` where `state` is exactly
+`booked|pending|no_effect|broken_link` and each item retains
+`{kind,id,label,tick,eventId,correlationId}`. Kinds are
+`event|state|transaction|cap_table|proposal|investment|distribution|news`.
+The resolver follows explicit persisted event/causation evidence and joins
+authoritative state, ledger, ownership, investment, distribution, and cited-news
+records. Correlation equality alone never upgrades a lane to `booked`.
+
 **GET `/simulations/{simId}/investment-proposals`** — Query: `runId?,limit,cursor,status?,companyId?`. Page items resolve `{id,company,founder,firm,fund,vcPartner,askAmountCents,preMoneyValuationCents,initialEquityBasisPoints,status,conversationId,finalTerms,proposedTick,expiresTick,investmentId,sourceEventId,lastTransitionEventId}` and are ordered `(proposedTick asc,id asc)` with a run-bound cursor.
 
 **GET `/simulations/{simId}/investment-proposals/{proposalId}`** — proposal item plus `{conversation,termsDiff,decision,timeline}`. The conversation is a bounded summary, `termsDiff` compares exact initial/final cents and basis points, and `decision` exposes rejection/validation and causal event evidence. Errors: 404.
@@ -189,7 +200,10 @@ For `why.kind=opening_seed`, the response contains only stored seasoned-month/mi
 
 **GET `/simulations/{simId}/investment-distributions/{distributionId}`** — immutable distribution plus `companyAccountId` and ordered beneficial-owner allocations `{allocationIndex,holder,shares,amountCents,accountId,ownershipBasisPoints}`. Errors: 404.
 
-All investment reads are read-only joins over WS-801 through WS-804 authority; they add no migration or state-hash surface. The React Investment Explorer remains the unfinished half of WS-805, so Phase 8 is not closed yet.
+All investment and evidence-path reads are read-only joins over WS-801 through
+WS-804 authority; they add no migration or state-hash surface. The React
+Investment Explorer consumes these shared schemas directly, and WS-805 closes
+Phase 8.
 
 **GET `/simulations/{simId}/contracts`** — Query: `type?,party?,status?`. Page of `{id,type,parties:[{id,role,signedTick}],status,effectiveTick,fee?}` ordered `id desc`.
 

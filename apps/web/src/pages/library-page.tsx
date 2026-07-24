@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   CalendarDays,
+  CheckCircle2,
   CircleDotDashed,
   GitBranch,
   Network,
   Play,
+  Sparkles,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import type { CreateSimulationRequest } from "@worldtangle/shared";
@@ -24,12 +26,18 @@ interface CreateFormState {
 }
 
 const CREATE_DEFAULTS: CreateFormState = {
-  name: "Riverbend baseline",
+  name: "Guided fuel-shock test",
   seed: "42",
-  endTick: "360",
-  llmMode: "live",
+  endTick: "31",
+  llmMode: "mock",
   runCostCentsMax: "500",
   perAgentDailyTokens: "128000",
+};
+
+const CUSTOM_DEFAULTS: CreateFormState = {
+  ...CREATE_DEFAULTS,
+  name: "Riverbend baseline",
+  endTick: "360",
 };
 
 function formatCreatedAt(value: string): string {
@@ -47,6 +55,7 @@ export function LibraryPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [form, setForm] = useState<CreateFormState>(CREATE_DEFAULTS);
+  const [guided, setGuided] = useState(true);
 
   const simulations = useQuery({
     queryKey: ["simulations", token],
@@ -56,7 +65,11 @@ export function LibraryPage() {
     mutationFn: (request: CreateSimulationRequest) => api.createSimulation(request),
     onSuccess: (created) => {
       void queryClient.invalidateQueries({ queryKey: ["simulations"] });
-      navigate(`/simulations/${created.simulation.id}`);
+      navigate(
+        guided
+          ? `/simulations/${created.simulation.id}?guided=causal-shock-v1`
+          : `/simulations/${created.simulation.id}`,
+      );
     },
   });
 
@@ -112,11 +125,27 @@ export function LibraryPage() {
         <form className="create-card" onSubmit={submit} aria-labelledby="create-heading">
           <div className="create-card__heading">
             <div>
-              <p className="eyebrow">New weave</p>
-              <h2 id="create-heading">Create a simulation</h2>
+              <p className="eyebrow">{guided ? "90-second pilot" : "New weave"}</p>
+              <h2 id="create-heading">
+                {guided ? "Guided causal test" : "Create a simulation"}
+              </h2>
             </div>
             <span className="scenario-chip">Riverbend · 100 agents</span>
           </div>
+          {guided ? (
+            <div className="guided-test-brief" role="note">
+              <div className="guided-test-brief__title">
+                <Sparkles size={18} />
+                <strong>Trace one cause through the world</strong>
+              </div>
+              <ol>
+                <li><CheckCircle2 size={15} /> Schedule one 30% fuel-price shock.</li>
+                <li><CheckCircle2 size={15} /> Follow its event and CPI signal.</li>
+                <li><CheckCircle2 size={15} /> Copy a reproducibility receipt.</li>
+              </ol>
+              <p>Uses deterministic mock decisions. No provider credentials or usage cost.</p>
+            </div>
+          ) : null}
           <label htmlFor="simulation-name">Simulation name</label>
           <input
             id="simulation-name"
@@ -125,49 +154,52 @@ export function LibraryPage() {
             required
             onChange={(event) => update("name", event.target.value)}
           />
-          <div className="form-grid">
-            <div>
-              <label htmlFor="simulation-seed">Seed</label>
-              <input
-                id="simulation-seed"
-                type="number"
-                step="1"
-                required
-                value={form.seed}
-                onChange={(event) => update("seed", event.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="simulation-ticks">End tick</label>
-              <input
-                id="simulation-ticks"
-                type="number"
-                min="1"
-                step="1"
-                required
-                value={form.endTick}
-                onChange={(event) => update("endTick", event.target.value)}
-              />
-            </div>
-          </div>
           <div className="llm-mode-field">
-            <label htmlFor="simulation-llm-mode">LLM mode</label>
+            <label htmlFor="simulation-llm-mode">Decision mode</label>
             <select
               id="simulation-llm-mode"
+              disabled={guided}
               value={form.llmMode}
               onChange={(event) => update("llmMode", event.target.value)}
             >
-              <option value="live">Live · MiniMax M3</option>
-              <option value="mock">Mock · deterministic</option>
+              <option value="mock">Mock · deterministic (recommended)</option>
+              <option value="live">Live · MiniMax M3 (advanced)</option>
             </select>
             <p>
-              {form.llmMode === "live"
-                ? "Tier-2 decisions call MiniMax M3 and count against the run budget."
-                : "Deterministic responses make the run fully offline and repeatable."}
+              {guided
+                ? "The guided fixture is fixed to deterministic mock decisions. Use a custom simulation to opt into Live mode."
+                : form.llmMode === "live"
+                ? "Live decisions require provider credentials, add latency and cost, and may not reproduce exactly."
+                : "Recommended for testing: fully offline, cost-free, and repeatable from the same seed."}
             </p>
           </div>
           <details className="budget-details">
-            <summary>Budget guardrails</summary>
+            <summary>Advanced reproducibility and budget</summary>
+            <div className="form-grid">
+              <div>
+                <label htmlFor="simulation-seed">Seed</label>
+                <input
+                  id="simulation-seed"
+                  type="number"
+                  step="1"
+                  required
+                  value={form.seed}
+                  onChange={(event) => update("seed", event.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="simulation-ticks">End tick</label>
+                <input
+                  id="simulation-ticks"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={form.endTick}
+                  onChange={(event) => update("endTick", event.target.value)}
+                />
+              </div>
+            </div>
             <div className="form-grid">
               <div>
                 <label htmlFor="run-budget">Run budget · cents</label>
@@ -199,11 +231,26 @@ export function LibraryPage() {
           )}
           <button className="button button--primary button--large" type="submit" disabled={createSimulation.isPending}>
             <Play size={18} fill="currentColor" />
-            {createSimulation.isPending ? "Creating Riverbend…" : "Create Riverbend run"}
+            {createSimulation.isPending
+              ? "Preparing Riverbend…"
+              : guided
+                ? "Start guided causal test"
+                : "Create Riverbend run"}
+          </button>
+          <button
+            className="button button--quiet create-card__mode-toggle"
+            type="button"
+            onClick={() => {
+              const nextGuided = !guided;
+              setGuided(nextGuided);
+              setForm(nextGuided ? CREATE_DEFAULTS : CUSTOM_DEFAULTS);
+            }}
+          >
+            {guided ? "Set up a custom simulation" : "Use the guided causal test"}
           </button>
           <p className="form-footnote">
             {form.llmMode === "live" ? "MiniMax M3 live" : "Mock LLM"}
-            {" · income tax baseline 18% · 360-day calendar"}
+            {` · income tax baseline 18% · ${form.endTick}-tick run`}
           </p>
         </form>
       </section>
