@@ -10,7 +10,7 @@ An AI-driven economic and social world simulator: a deterministic economic engin
 WS-610 acceptance artifacts; it rejects missing, malformed, tampered or
 semantically inconsistent evidence.
 
-Phases 0–8 are complete: the MVP is accepted through WS-710 and the investment experience through WS-805. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, venture-investment, exact-cap-table, causal-evidence, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. See the [project status](docs/PROJECT_STATUS.md), [guided tester brief](docs/USER_TESTING.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap). External citizen tools and connector dependencies remain outside the roadmap through WS-1106.
+Phases 0–8 are complete: the MVP is accepted through WS-710 and the investment experience through WS-805. The exact seed-42/mock world runs 360 ticks, stays inside its economic envelopes, replays from manifest/journal/cache with zero divergences, and produces identical terminal logical-state and raw event-log hashes in a second independent run. The product includes deterministic company, labor, production, market, energy, insolvency, credit, news, sentiment, indicator, replay, export, why-panel, budget/control, venture-investment, exact-cap-table, causal-evidence, and browser-acceptance paths. Live mode routes Tier 2 to `MiniMax-M3` and Tier 3 to logical `kimi-k2.6`; `kimi-k2.7-code` is an explicit opt-in, and Anthropic is legacy-only. Phase 12 now has an isolated Agent Lab foundation for native, shadow, and bounded external citizen studies, but its real-Hermes production pilot remains an explicit, unrun release gate. See the [project status](docs/PROJECT_STATUS.md), [guided tester brief](docs/USER_TESTING.md), [Agent Lab contract](docs/PHASE_12_AGENT_LAB.md), [MVP acceptance evidence](docs/WS_710_MVP_ACCEPTANCE.md), [provider evidence](docs/WS_601_MINIMAX_KIMI_PROVIDERS.md), and [roadmap](docs/IMPLEMENTATION_PLAN.md#3-phased-roadmap).
 
 ## Documentation
 
@@ -19,13 +19,15 @@ Phases 0–8 are complete: the MVP is accepted through WS-710 and the investment
 | [docs/README.md](docs/README.md) | Complete documentation index, status labels, and document ownership |
 | [docs/PRD.md](docs/PRD.md) | Product requirements: vision, use cases, functional/non-functional requirements, MVP definition, acceptance criteria |
 | [docs/USER_TESTING.md](docs/USER_TESTING.md) | Controlled guided-test script, evidence states, feedback capture, and release boundaries |
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 26-module architecture + phased roadmap (Phases 0–11) |
+| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 26-module architecture + phased roadmap (Phases 0–12) |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | REST + SSE contracts, versioned event catalog |
 | [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Entity catalog, state machines, workflow diagrams |
 | [docs/INITIAL_WORLD.md](docs/INITIAL_WORLD.md) | The "Riverbend" 100-agent starter world generation spec |
 | [docs/TASK_BACKLOG.md](docs/TASK_BACKLOG.md) | 93 engineering tasks mapped to phases |
 | [docs/LIVE_PROVIDER_CONTRACT.md](docs/LIVE_PROVIDER_CONTRACT.md) | Live Tier 2 proposal contract, usage/cost evidence, strict validation, and fallback proof |
 | [docs/LOCAL_OPERATIONS.md](docs/LOCAL_OPERATIONS.md) | Local startup, root `.env` loading, live-vs-mock creation, and runtime verification |
+| [docs/PHASE_12_AGENT_LAB.md](docs/PHASE_12_AGENT_LAB.md) | Bounded external-agent architecture, Hermes harness, artifacts, taint, and release gate |
+| [docs/ODD_AGENT_LAB.md](docs/ODD_AGENT_LAB.md) | ODD study-description and fitness-for-purpose record |
 | [docs/PHASE_3_FINANCE.md](docs/PHASE_3_FINANCE.md) | Ledger convention, genesis books, payroll/household rules, indicators, and financial APIs |
 | [docs/PHASE_4_FOUNDATIONS.md](docs/PHASE_4_FOUNDATIONS.md) | Legal lifecycle, incorporation, labor matching, events, persistence, and release gates |
 | [docs/WS_409_WORLD_EXPLORER.md](docs/WS_409_WORLD_EXPLORER.md) | Phase 4 read contracts, API routes, UI routes, why-panels, and acceptance evidence |

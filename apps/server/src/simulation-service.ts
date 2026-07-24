@@ -15,6 +15,7 @@ import {
   injectWorldEventRequestSchema,
   llmControlRequestSchema,
   PROMPT_PACK_VERSION,
+  recordedAgentLabSubmissionSchema,
   RULESET_VERSION,
   SENTIMENT_TOPICS,
   ventureFirmCreatedPayloadSchema,
@@ -98,6 +99,7 @@ import {
   readRunCheckpoint,
   RunLocator,
   SqliteAgentStore,
+  SqliteAgentLabStore,
   SqliteApiTaskStore,
   SqliteCreditReadStore,
   SqliteEvidencePathReadStore,
@@ -191,6 +193,12 @@ import {
   replayEventHash,
   replayJournalDigest,
 } from "./replay-executor";
+import { resolveAgentLabAssignments } from "./agent-lab-cohort";
+import {
+  AgentLabExternalTurnProvider,
+  AgentLabRoutedLlmProvider,
+  RecordedAgentLabReplayProvider,
+} from "./agent-lab-provider";
 
 const SUPPORTED_WORLD_SPEC = "riverbend-100@1";
 const MAX_SYNC_ADVANCE_TICKS = 50;
@@ -520,6 +528,22 @@ export class SimulationService implements SimulationApi {
     const population = this.enableAgentFramework
       ? generateRiverbendPopulation({ runId, seed: input.scenario.seed })
       : undefined;
+    if (input.scenario.agentLab !== undefined && population === undefined) {
+      throw new EngineError(
+        "VALIDATION_FAILED",
+        "Agent Lab trials require the Riverbend agent framework",
+      );
+    }
+    const agentLab = input.scenario.agentLab === undefined
+      ? undefined
+      : {
+          ...input.scenario.agentLab,
+          resolvedAssignments: resolveAgentLabAssignments(
+            input.scenario.agentLab,
+            population!.residents,
+            input.scenario.seed,
+          ),
+        };
     const createdWall = this.wallClock();
     const simulation: Simulation = {
       id: simulationId,
@@ -558,6 +582,7 @@ export class SimulationService implements SimulationApi {
         scenarioDigest: hashValue(input.scenario),
         worldSpecDigest: hashValue(input.scenario.worldSpec),
         createdWall,
+        ...(agentLab === undefined ? {} : { agentLab }),
       } : {
         ...manifestTemplate,
         runId,
@@ -897,6 +922,12 @@ export class SimulationService implements SimulationApi {
           llmEnabled: input.scenario.llmMode !== "off",
           sourceEventId: fact.eventId,
         });
+        if (persisted.manifest.agentLab !== undefined) {
+          new SqliteAgentLabStore(db, persisted.id).initializeTrial(
+            persisted.manifest.agentLab,
+            createdWall,
+          );
+        }
         return ids.serialize();
       });
       db.pragma("wal_checkpoint(TRUNCATE)");
@@ -994,12 +1025,29 @@ export class SimulationService implements SimulationApi {
       }
       const cacheArtifact = new SqliteLlmResponseCache(db, sourceRunId).exportArtifact();
       const llmCalls = new SqliteLlmCallStore(db, sourceRunId).listForReplay();
+      const recordedAgentLabSubmissions = events.flatMap((event) => {
+        if (event.type !== "agent.external_submission.recorded") return [];
+        const payload = recordedAgentLabSubmissionSchema.parse(event.payload);
+        return [{
+          requestHash: payload.requestHash,
+          sourceEventId: event.eventId,
+          proposalDigest: payload.proposalDigest,
+          proposal: payload.proposal,
+        }];
+      });
       const cachedRequestHashes = new Set(
         cacheArtifact.entries.map((entry) => entry.key.requestHash),
       );
+      const recordedAgentLabRequestHashes = new Set(
+        recordedAgentLabSubmissions.map((entry) => entry.requestHash),
+      );
       const missingCacheHashes = [...new Set(
         llmCalls
-          .filter((call) => call.status === "success" && !cachedRequestHashes.has(call.requestHash))
+          .filter((call) => (
+            call.status === "success" &&
+            !cachedRequestHashes.has(call.requestHash) &&
+            !recordedAgentLabRequestHashes.has(call.requestHash)
+          ))
           .map((call) => call.requestHash),
       )].sort();
       const createInput = createSimulationRequestSchema.parse({
@@ -1013,6 +1061,7 @@ export class SimulationService implements SimulationApi {
         creationRequestId: creationCommand.requestId,
         cacheArtifact,
         llmCalls,
+        recordedAgentLabSubmissions,
         missingCacheHashes,
         toTick,
         journalDigest: replayJournalDigest(events),
@@ -1052,6 +1101,7 @@ export class SimulationService implements SimulationApi {
         journalDigest: source.journalDigest,
         startedWall: this.wallClock(),
       });
+      store.importAgentLabSubmissions(source.recordedAgentLabSubmissions);
       store.importLlmExpectations(source.llmCalls);
       const genesisMismatch = firstReplayEventMismatch(
         source.events.slice(0, targetEvents.length),
@@ -2804,10 +2854,39 @@ export class SimulationService implements SimulationApi {
     });
     // Built-in mock and cache-only replay are deterministic evidence boundaries.
     // Injected/live providers retain measured latency for operational telemetry.
-    return new TimedLlmProvider(
+    const native = new TimedLlmProvider(
       budgeted,
       deterministicLatency ? () => 0 : this.monotonicClock,
     );
+    if (run.manifest.agentLab === undefined) return native;
+
+    const externalReplayed = cacheOnly
+      ? new ReplayEvidenceLlmProvider(
+          new RecordedAgentLabReplayProvider(
+            db,
+            run.id,
+            run.manifest.agentLab,
+          ),
+          db,
+          run.id,
+        )
+      : new AgentLabExternalTurnProvider(
+          new SqliteAgentLabStore(db, run.id),
+          run.manifest.agentLab,
+          this.wallClock,
+        );
+    const external = new TimedLlmProvider(
+      externalReplayed,
+      cacheOnly ? () => 0 : this.monotonicClock,
+    );
+    return new AgentLabRoutedLlmProvider({
+      native,
+      external,
+      store: new SqliteAgentLabStore(db, run.id),
+      config: run.manifest.agentLab,
+      wallClock: this.wallClock,
+      replay: cacheOnly,
+    });
   }
 
   private async executeTicks(
@@ -2848,10 +2927,14 @@ export class SimulationService implements SimulationApi {
         ? undefined
         : await prepareTier2DecisionBatch({
             db,
+            simulationId,
             runId,
             tick: beforePreparation.currentTick + 1,
             provider: tier2Provider,
             promptPackVersion: run.manifest.promptPackVersion,
+            ...(run.manifest.agentLab === undefined
+              ? {}
+              : { agentLab: run.manifest.agentLab }),
             opportunities,
           });
       const conversationOpportunities = this.enableAgentFramework
@@ -2950,7 +3033,9 @@ export class SimulationService implements SimulationApi {
           if (tier2Batch !== undefined) {
             loop.registerPhase(
               "decisions",
-              createTier2DecisionPhaseHandler(db, runId, tier2Batch),
+              createTier2DecisionPhaseHandler(db, runId, tier2Batch, {
+                wallClock: this.wallClock,
+              }),
             );
           }
           loop.registerPhase(
@@ -3014,6 +3099,12 @@ export class SimulationService implements SimulationApi {
       loop.advance(ticksThisPass);
       remaining -= ticksThisPass;
       const completedTick = repository.getRun(runId).currentTick;
+      if (run.manifest.agentLab !== undefined) {
+        new SqliteAgentLabStore(db, runId).finalizePostTick(
+          completedTick,
+          computeLogicalStateHash(db, runId),
+        );
+      }
       if (
         tier2Batch !== undefined ||
         conversationBatch !== undefined ||

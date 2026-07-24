@@ -35,6 +35,7 @@ import {
 import { replayRunSchema } from "./replay";
 import { exportJobSchema } from "./export";
 import { digestStreamDataSchema } from "./event-stream";
+import { agentLabScenarioSchema } from "./agent-lab";
 
 const positiveIntegerQuery = z.coerce.number().int().positive().safe();
 const nonnegativeIntegerQuery = z.coerce.number().int().nonnegative().safe();
@@ -78,6 +79,7 @@ export const createSimulationRequestSchema = z
         budgets: scenarioBudgetSchema,
         policyOverrides: z.record(z.string(), z.number().int().safe()),
         endTick: z.number().int().positive().safe(),
+        agentLab: agentLabScenarioSchema.optional(),
       })
       .strict(),
   })

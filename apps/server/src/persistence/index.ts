@@ -3,6 +3,7 @@ export * from "./bank-circuit-store";
 export * from "./credit-store";
 export * from "./credit-read-store";
 export * from "./agent-store";
+export * from "./agent-lab-store";
 export * from "./conversation-store";
 export * from "./database";
 export * from "./event-store";

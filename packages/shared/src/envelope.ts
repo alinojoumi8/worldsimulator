@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { runManifestAgentLabSchema } from "./agent-lab";
 
 export const ACTOR_KINDS = ["agent", "institution", "system", "admin"] as const;
 
@@ -78,7 +79,8 @@ export const runManifestSchema = z.object({
   scenarioDigest: z.string().min(1),
   worldSpecDigest: z.string().min(1),
   createdWall: z.string().min(1),
-});
+  agentLab: runManifestAgentLabSchema.optional(),
+}).strict();
 export type RunManifest = z.infer<typeof runManifestSchema>;
 
 export const ENGINE_ERROR_CODES = [

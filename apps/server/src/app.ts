@@ -30,6 +30,10 @@ import {
   CommittedEventStream,
   registerEventStreamRoute,
 } from "./event-stream";
+import {
+  AgentLabGateway,
+  registerAgentLabRoutes,
+} from "./agent-lab-gateway";
 
 export interface AppOptions {
   /** When set, API routes except /api/v1/health require `Authorization: Bearer <token>`. */
@@ -129,7 +133,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     app.addHook("onRequest", async (request, reply) => {
       const pathname = request.url.split("?", 1)[0] ?? request.url;
       const isApiPath = pathname === "/api/v1" || pathname.startsWith("/api/v1/");
-      if (!isApiPath || pathname === "/api/v1/health") return;
+      const isAgentLabPath = pathname.startsWith("/api/v1/agent-lab/");
+      if (!isApiPath || pathname === "/api/v1/health" || isAgentLabPath) return;
       if (request.headers.authorization !== expected) {
         return reply
           .code(401)
@@ -238,6 +243,13 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
   registerSimulationRoutes(app, simulationApi);
   registerEventStreamRoute(app, eventStream);
+  registerAgentLabRoutes(
+    app,
+    new AgentLabGateway(
+      dataDir,
+      options.wallClock ?? (() => new Date().toISOString()),
+    ),
+  );
   const webRoot = options.webRoot === undefined ? DEFAULT_WEB_ROOT : options.webRoot;
   if (webRoot !== false && existsSync(webRoot)) {
     registerWebShell(app, webRoot);

@@ -3,16 +3,19 @@
 import { z } from "zod";
 import {
   agentActionSchema,
+  agentScopedObservationSchema,
   canonicalStringify,
   decisionOptionSchema,
   decisionSchema,
   EngineError,
+  hashValue,
   type AgentAction,
   type Decision,
   type DecisionOption,
   type EventEnvelope,
   type LlmCallRecord,
   type Persona,
+  type RunManifestAgentLab,
   type TriggerSignal,
 } from "@worldtangle/shared";
 import {
@@ -33,6 +36,7 @@ import {
 } from "@worldtangle/engine";
 import {
   SqliteAgentStore,
+  SqliteAgentLabStore,
   SqliteCreditStore,
   SqliteLlmCallStore,
   SqliteMarketStore,
@@ -46,6 +50,8 @@ import {
   buildLlmCallRecordEvidence,
   buildLlmCallTelemetryEvidence,
 } from "./llm-call-evidence";
+import { controllerForAgent } from "./agent-lab-cohort";
+import { agentLabTurnId } from "./agent-lab-provider";
 
 export const TIER2_DECISION_KINDS = [
   "founder_pricing",
@@ -125,6 +131,18 @@ interface ActionDraft {
   readonly status: "applied" | "failed";
   readonly resultEventIds: readonly string[];
   readonly error?: NonNullable<AgentAction["error"]>;
+}
+
+interface AgentLabFinalization {
+  readonly opportunityKey: string;
+  readonly decisionId: string;
+  readonly status: "applied" | "rejected" | "fallback";
+  readonly validatorResults: readonly {
+    readonly validator: string;
+    readonly ok: boolean;
+    readonly code: string;
+    readonly message: string;
+  }[];
 }
 
 function freezeOpportunity(input: Tier2DecisionOpportunity): Tier2DecisionOpportunity {
@@ -549,14 +567,17 @@ export function discoverTier2DecisionOpportunities(
 
 export async function prepareTier2DecisionBatch(input: {
   readonly db: WorldDatabase;
+  readonly simulationId?: string;
   readonly runId: string;
   readonly tick: number;
   readonly provider: RoutedLlmProvider;
   readonly promptPackVersion: number;
+  readonly agentLab?: RunManifestAgentLab;
   readonly opportunities?: readonly Tier2DecisionOpportunity[];
 }): Promise<PreparedTier2DecisionBatch> {
   const opportunities = input.opportunities ??
     discoverTier2DecisionOpportunities(input.db, input.runId, input.tick);
+  const agentStore = new SqliteAgentStore(input.db, input.runId);
   const entries: PreparedTier2Decision[] = [];
   // Sequential gateway access keeps budget events and threshold transitions in
   // canonical opportunity order. WS-1103 owns provider-side batch scheduling.
@@ -564,7 +585,7 @@ export async function prepareTier2DecisionBatch(input: {
     if (opportunity.trigger.tick !== input.tick) {
       throw new EngineError("CONFLICT", "Tier-2 opportunity belongs to another tick");
     }
-    const prompt = buildAgentDecisionPrompt({
+    const builtPrompt = buildAgentDecisionPrompt({
       persona: opportunity.persona,
       tick: input.tick,
       simDate: simDateForTick(input.tick),
@@ -577,6 +598,106 @@ export async function prepareTier2DecisionBatch(input: {
       budgetTag: opportunity.budgetTag,
       promptPackVersion: input.promptPackVersion,
     });
+    const controller = input.agentLab === undefined
+      ? "native"
+      : controllerForAgent(input.agentLab, opportunity.agentId);
+    const ownProfile = agentStore.getProfile(opportunity.agentId, 100);
+    const trustedState = opportunity.trustedState as Readonly<Record<string, unknown>>;
+    const evidenceRefs = Array.isArray(trustedState["evidenceRefs"])
+      ? trustedState["evidenceRefs"].filter(
+          (reference): reference is string => typeof reference === "string",
+        )
+      : [opportunity.trigger.sourceEventId];
+    const learnedValue = Object.fromEntries(
+      Object.entries(trustedState).filter(([key]) => key !== "evidenceRefs"),
+    );
+    const observation = agentScopedObservationSchema.parse({
+      policyVersion: "partial_observation_v1",
+      ownState: {
+        agent: {
+          id: ownProfile.agent.id,
+          personaId: ownProfile.agent.personaId,
+          householdId: ownProfile.agent.householdId,
+          occupationCode: ownProfile.agent.occupationCode,
+          employmentStatus: ownProfile.agent.employmentStatus,
+          creditScore: ownProfile.agent.creditScore,
+          quarantine: ownProfile.agent.quarantine,
+          aliveFlags: ownProfile.agent.aliveFlags,
+        },
+        persona: ownProfile.persona,
+        annualIncomeCents: ownProfile.annualIncomeCents,
+        roleCode: ownProfile.roleCode,
+        organizationId: ownProfile.organizationId,
+        segment: ownProfile.segment,
+        goals: ownProfile.goals,
+      },
+      learnedFacts: [{
+        id: `fact_${hashValue({
+          opportunityKey: opportunity.key,
+          tick: input.tick,
+          evidenceRefs,
+        }).slice(0, 24)}`,
+        kind: `decision_context.${opportunity.kind}`,
+        learnedTick: input.tick - 1,
+        value: learnedValue,
+        evidenceEventIds: evidenceRefs,
+      }],
+      deliveredItems: opportunity.untrustedItems
+        .filter((item) => item.source !== "memory")
+        .map((item) => ({
+          source: item.source === "message" ? "message" : "news",
+          id: item.id,
+          content: item.content,
+          deliveredTick: input.tick - 1,
+          references: item.references ?? [],
+        })),
+      publicPrices: [],
+      citedMemories: opportunity.untrustedItems
+        .filter((item) => item.source === "memory")
+        .map((item) => ({
+          memoryId: item.id,
+          summary: item.content,
+          recordedTick: input.tick - 1,
+          references: item.references?.length
+            ? item.references
+            : [opportunity.trigger.sourceEventId],
+        })),
+    });
+    if (input.agentLab !== undefined && input.simulationId === undefined) {
+      throw new EngineError("INTERNAL", "Agent Lab preparation requires a simulation ID");
+    }
+    const request = Object.freeze({
+      ...builtPrompt.request,
+      ...(input.agentLab === undefined
+        ? {}
+        : {
+            agentLab: Object.freeze({
+              simulationId: input.simulationId!,
+              runId: input.runId,
+              studyId: input.agentLab.studyId,
+              trialId: input.agentLab.trialId,
+              controller,
+              opportunityKey: opportunity.key,
+              trigger: opportunity.trigger,
+              completedTick: input.tick - 1,
+              targetTick: input.tick,
+              observation,
+              offeredOptions: opportunity.options,
+              driverPolicyDigest: input.agentLab.driverPolicyDigest,
+              promptDigest: input.agentLab.promptDigest,
+              toolSchemaDigest: input.agentLab.toolSchemaDigest,
+            }),
+            ...(controller === "external"
+              ? {
+                  cacheScope: (
+                    `agent-lab:${input.agentLab.trialId}:` +
+                    hashValue(opportunity.key).slice(0, 24)
+                  ),
+                }
+              : {}),
+          }),
+    });
+    const prompt = Object.freeze({ ...builtPrompt, request });
     let route: LlmProviderRoute;
     try {
       route = input.provider.route(prompt.request);
@@ -859,9 +980,12 @@ export function createTier2DecisionPhaseHandler(
   db: WorldDatabase,
   runId: string,
   batch: PreparedTier2DecisionBatch,
+  options: Readonly<{ wallClock?: () => string }> = {},
 ): PhaseHandler {
   const agentStore = new SqliteAgentStore(db, runId);
   const callStore = new SqliteLlmCallStore(db, runId);
+  const agentLabStore = new SqliteAgentLabStore(db, runId);
+  const wallClock = options.wallClock ?? (() => new Date().toISOString());
   return {
     module: "M04-tier2-live-decisions",
     order: 50,
@@ -897,6 +1021,7 @@ export function createTier2DecisionPhaseHandler(
       };
       const drafts: ActionDraft[] = [];
       const decisions: Decision[] = [];
+      const agentLabFinalizations: AgentLabFinalization[] = [];
 
       for (const entry of batch.entries) {
         if (entry.prompt.request.tick !== ctx.tick || entry.opportunity.trigger.tick !== ctx.tick) {
@@ -952,6 +1077,35 @@ export function createTier2DecisionPhaseHandler(
         decisions.push(decision);
         state.rationaleByDecision.set(decisionId, decision.rationale);
 
+        const externalContext = entry.prompt.request.agentLab?.controller === "external"
+          ? entry.prompt.request.agentLab
+          : undefined;
+        const externalInputEvent = externalContext === undefined || !entry.result.ok
+          ? undefined
+          : ctx.emit("agent.external_submission.recorded", {
+              protocolVersion: "wt.agent-lab.v1",
+              studyId: externalContext.studyId,
+              trialId: externalContext.trialId,
+              turnId: agentLabTurnId(
+                externalContext.trialId,
+                externalContext.opportunityKey,
+              ),
+              agentId: decision.agentId,
+              opportunityKey: externalContext.opportunityKey,
+              targetTick: ctx.tick,
+              projectionHash: hashValue(externalContext.observation),
+              menuHash: hashValue(externalContext.offeredOptions),
+              requestHash: entry.result.requestHash,
+              proposalDigest: hashValue(entry.result.value),
+              proposal: entry.result.value,
+              actionId: (entry.result.value as { actionId?: unknown }).actionId ?? null,
+              params: (entry.result.value as { params?: unknown }).params ?? null,
+              driverPolicyDigest: externalContext.driverPolicyDigest,
+            }, {
+              actor: { kind: "agent", id: decision.agentId },
+              correlationId: decisionId,
+              causationId: decision.trigger.sourceEventId,
+            });
         const callEvent = ctx.emit("llm.call.recorded", {
           schemaVersion: 2,
           callId,
@@ -978,7 +1132,7 @@ export function createTier2DecisionPhaseHandler(
         }, {
           actor: { kind: "agent", id: decision.agentId },
           correlationId: decisionId,
-          causationId: decision.trigger.sourceEventId,
+          causationId: externalInputEvent?.eventId ?? decision.trigger.sourceEventId,
         });
         callStore.insert(buildCallRecord({
           entry,
@@ -1050,6 +1204,26 @@ export function createTier2DecisionPhaseHandler(
             status: "applied",
             resultEventIds,
           });
+          if (externalContext !== undefined) {
+            agentLabFinalizations.push({
+              opportunityKey: externalContext.opportunityKey,
+              decisionId,
+              status: resolved.source === "live" ? "applied" : "fallback",
+              validatorResults: resolved.validationFailures.length === 0
+                ? [{
+                    validator: "action_registry",
+                    ok: true,
+                    code: "OK",
+                    message: "existing action registry accepted and applied the intent",
+                  }]
+                : resolved.validationFailures.map((failure) => ({
+                    validator: failure.stage,
+                    ok: false,
+                    code: failure.code,
+                    message: failure.message,
+                  })),
+            });
+          }
         } else {
           const rejection = dispatched.status === "failed" ? dispatched.error : dispatched.rejection;
           const rejected = ctx.emit("agent.action.rejected", {
@@ -1076,6 +1250,19 @@ export function createTier2DecisionPhaseHandler(
             resultEventIds: [rejected.eventId],
             error: { code: rejection.code, message: rejection.message },
           });
+          if (externalContext !== undefined) {
+            agentLabFinalizations.push({
+              opportunityKey: externalContext.opportunityKey,
+              decisionId,
+              status: resolved.source === "live" ? "rejected" : "fallback",
+              validatorResults: [{
+                validator: dispatched.status === "failed" ? "execution" : "action_registry",
+                ok: false,
+                code: rejection.code,
+                message: rejection.message,
+              }],
+            });
+          }
         }
         ctx.count("decisions", 1);
         ctx.count("llmCalls", providerAttemptCount(entry.result));
@@ -1122,9 +1309,19 @@ export function createTier2DecisionPhaseHandler(
         });
       });
       agentStore.saveDecisionResult([], actions);
+      const actionByDecision = new Map(actions.map((action) => [action.decisionId!, action]));
+      for (const finalization of agentLabFinalizations) {
+        const action = actionByDecision.get(finalization.decisionId);
+        agentLabStore.finalizeTurn({
+          opportunityKey: finalization.opportunityKey,
+          status: finalization.status,
+          validatorResults: [...finalization.validatorResults],
+          resultEventIds: action?.resultEventIds ?? [],
+          completedWall: wallClock(),
+        });
+      }
 
       const memoryStore = new DeterministicMemoryStore({ repository: agentStore, ids: ctx.ids });
-      const actionByDecision = new Map(actions.map((action) => [action.decisionId!, action]));
       for (const decision of decisions) {
         const action = actionByDecision.get(decision.id);
         const recorded = memoryStore.record({

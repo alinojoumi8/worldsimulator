@@ -7,7 +7,7 @@ Frontend ⇄ backend contract. The frontend consumes the shared schemas describe
 - **Base URL:** `http://127.0.0.1:4000/api/v1` (server binds loopback by default).
 - **Versioning:** URI major version (`/api/v1`); additive changes only within v1; breaking → `/api/v2`. Every event/DTO also carries an integer `schemaVersion` (ADR-0010).
 - **Machine-readable contracts:** current request, response, and SSE DTOs are Zod schemas in `packages/shared` (single source of truth). Server, frontend, and contract tests consume those schemas directly. The Phase 0 event/intent envelope, run-manifest, and engine-error contracts also export stable Draft 2020-12 documents through `coreJsonSchemaBundle`; HTTP JSON Schema/OpenAPI publication remains planned work.
-- **Auth:** MVP is a single-user local tool with no auth by default. If `WORLDTANGLE_API_TOKEN` is set, `/api/v1/*` requires `Authorization: Bearer <token>` except `GET /health`; missing/invalid tokens return 401. Built dashboard routes and static assets remain public. The `read`/`admin` labels below are future authorization categories; the current token grants both, with role-based 403 semantics reserved for later (ADR-0011).
+- **Auth:** MVP is a single-user local tool with no auth by default. If `WORLDTANGLE_API_TOKEN` is set, `/api/v1/*` requires `Authorization: Bearer <token>` except `GET /health`; missing/invalid tokens return 401. Phase 12 Agent Lab routes instead require their own hash-stored, trial/run/agent/scope-bound PAT and are loopback-only. Built dashboard routes and static assets remain public. The `read`/`admin` labels below are future authorization categories; the current operator token grants both, with role-based 403 semantics reserved for later (ADR-0011).
 - **Money:** integer cents serialized as **strings** (`"125000"` = $1,250.00) with `"currency":"SIM_USD"`. Rates in basis points (int).
 - **Time:** `tick` (int) + `simDate` (`"Y0001-M02-D15"`); wall times ISO-8601 UTC.
 - **IDs:** typed-prefix strings (`agt_…`, `co_…`).
@@ -240,8 +240,8 @@ Errors: 400 unknown series. Not cursor-paginated (bounded by tick range; max 10 
 
 **Planned — GET `/simulations/{simId}/runs`** — proposed standalone run list. Today `GET /simulations/{simId}` returns the simulation's runs directly.
 
-**POST `/simulations/{simId}/runs/{runId}/replay`** — start a replay run from the journal + LLM cache. Auth: admin. Request: `{"toTick?":200,"mode":"strict"}` (`strict` = fail on divergence; `observe` = record divergence and continue with cached-else-fallback).
-Response 202: `{"replayRun":{"id":"run_000004","replayOf":"run_000001","sourceSimulationId":"sim_000001","mode":"strict","toTick":200,"status":"running","currentTick":0,"lastComparedSeq":1,"divergenceCount":0,"firstDivergence":null,"sourceStateHash":null,"replayStateHash":null,"cacheArtifactDigest":"…","journalDigest":"…","startedWall":"…","completedWall":null,"errorCode":null,"errorMessage":null}}`. Poll `GET /simulations/{simId}/status?runId=run_000004`; its optional `replay` field has the same shape. Terminal status is `completed`, `diverged`, or `failed`. Divergence kinds are `cache_incomplete`, `event_mismatch`, `state_hash_mismatch`, and `unsupported_journal_command`. Replay is cache-only and never calls a live provider. Errors: 400 target tick beyond source or malformed request; 404 source/run; 409 source not terminal, incompatible manifest pins, or mutated source artifact.
+**POST `/simulations/{simId}/runs/{runId}/replay`** — start a replay run from the journal + LLM cache. Agent Lab external proposals are replayed from their strict `agent.external_submission.recorded` causal inputs rather than from the generic cache. Auth: admin. Request: `{"toTick?":200,"mode":"strict"}` (`strict` = fail on divergence; `observe` = record divergence and continue with recorded/cached-else-fallback).
+Response 202: `{"replayRun":{"id":"run_000004","replayOf":"run_000001","sourceSimulationId":"sim_000001","mode":"strict","toTick":200,"status":"running","currentTick":0,"lastComparedSeq":1,"divergenceCount":0,"firstDivergence":null,"sourceStateHash":null,"replayStateHash":null,"cacheArtifactDigest":"…","journalDigest":"…","startedWall":"…","completedWall":null,"errorCode":null,"errorMessage":null}}`. Poll `GET /simulations/{simId}/status?runId=run_000004`; its optional `replay` field has the same shape. Terminal status is `completed`, `diverged`, or `failed`. Divergence kinds are `cache_incomplete`, `event_mismatch`, `state_hash_mismatch`, and `unsupported_journal_command`. Replay is offline-only and never calls a live provider. Errors: 400 target tick beyond source or malformed request; 404 source/run; 409 source not terminal, incompatible manifest pins, or mutated source artifact.
 
 **Planned — GET `/runs/compare?base=run_000001&candidate=run_000002&series=cpi,unemploymentRate`** — aligned series and divergence contract scheduled for WS-1104; this route is not registered today.
 
@@ -249,6 +249,45 @@ Response 202: `{"replayRun":{"id":"run_000004","replayOf":"run_000001","sourceSi
 Response 202 returns the schema-v1 job: `{"export":{"id":"xpt_0000000100000001","simulationId":"sim_00000001","runId":"run_00000001","format":"jsonl","datasets":["events","transactions","indicators"],"status":"queued","sourceTick":360,"sourceStateHash":"…","disclaimer":"Simulated scenario data - not a prediction and not financial, legal, or political advice.","files":[],"manifest":null,"auditEvents":[…],"createdWall":"…","startedWall":null,"completedWall":null,"errorCode":null,"errorMessage":null}}`. The source cannot be running or have an active advance/replay operation. Creation pins the exact source tick and logical state hash.
 
 **GET `/exports/{exportId}`** — poll the restart-safe job. A completed response includes one content-addressed relative artifact per dataset, for example `{"dataset":"events","format":"jsonl","path":"exports/xpt_0000000100000001/events-{sha256}.jsonl","bytes":10485760,"rows":50000,"sha256":"…"}`, plus a checksummed `exports/{exportId}/manifest.json`. JSONL uses canonical LF-delimited values; CSV quotes every cell and uses canonical JSON for nested payload/leg cells. Audit events are gapless, versioned, and causally linked. Errors: 404; `status:"failed"` carries `errorCode` and `errorMessage`. Export paths are run-local artifact paths, not arbitrary filesystem paths.
+
+### 2.10 Agent Laboratory [Phase 12 research]
+
+Every route in this section rejects non-loopback clients and requires a
+one-time-generated Agent Lab PAT. The stored credential row contains only the
+PAT's SHA-256 hash and its exact study, trial, run, citizen, mode, and scopes.
+
+**GET `/agent-lab/me`** — return the credential-bound identity, mode, and exact
+granted scopes. Cross-run or cross-agent access returns 404/403 without exposing
+the other entity.
+
+**GET `/agent-lab/turn`** — query `waitMs` from 0 to 30,000. Response 200:
+`{"simulated":true,"turn":AgentTurnEnvelope|null}`. The envelope contains one
+scoped observation, an engine-authored menu, target tick, projection/menu
+hashes, cursor, and deadline.
+
+**POST `/agent-lab/actions`** — body is strict `AgentActionSubmission`: turn and
+target tick, observed projection/menu hashes, idempotency key, exact
+`{actionId,params,rationale}`, and driver-policy digest. A queued external
+submission returns 202; a terminal shadow/rejected/stale result returns 200.
+Retrying the same idempotency key returns the original receipt. A different
+accepted submission for the turn returns 409.
+
+**GET `/agent-lab/actions/{submissionId}`** — return the owned
+`AgentActionReceipt`. Terminal statuses are `shadowed`, `applied`, `rejected`,
+`stale`, or `fallback`; `queued` is nonterminal. Applied receipts include result
+event IDs and, after commit, the post-tick logical state hash.
+
+**POST `/mcp`** — Streamable HTTP MCP endpoint. Supported methods are
+`initialize`, `ping`, `tools/list`, and `tools/call`; notifications receive 202.
+Only `wt_identity_get`, `wt_turn_wait`, `wt_action_submit`, and
+`wt_receipt_get` can be listed or called. Unknown methods/tools, unknown fields,
+private-data canaries, stale hashes, and foreign IDs fail closed. `GET /mcp`
+authenticates and returns 405 with `Allow: POST`.
+
+`AgentTurnEnvelope`, `AgentActionSubmission`, and `AgentActionReceipt` are
+defined in `packages/shared/src/agent-lab.ts`. The complete boundary, replay,
+artifact, and release contract is in
+[PHASE_12_AGENT_LAB.md](PHASE_12_AGENT_LAB.md).
 
 ## 3. Real-time contract
 
@@ -317,6 +356,7 @@ Rules: payloads are validated at append time; money as string-cents; **no free t
 | `company.capacity.disrupted` | bounded business disaster applied | `{worldEventId, companyId, capacityReductionBp, priorMultiplierBp, nextMultiplierBp, effectiveTick, expiresTick}` |
 | `agent.created` | world-gen | `{agentId, occupation, householdId}` |
 | `llm.call.recorded` | immutable provider/fallback evidence reserved inside the tick | `{schemaVersion,callId,decisionId,agentId,moduleId,purpose,provider,model,requestHash,promptHash,status,effectiveTier,fallbackReason?,cached,attempts}` |
+| `agent.external_submission.recorded` [Phase 12] | accepted external proposal journaled as causal input before the provider call evidence | `{protocolVersion,studyId,trialId,turnId,agentId,opportunityKey,targetTick,projectionHash,menuHash,proposalDigest,actionId,params,driverPolicyDigest}` |
 | `agent.decision.recorded` | bounded choice resolved | `{schemaVersion,decisionId,agentId,tier,kind,chosenActionId,llmCallId?,validationFailureCount}` |
 | `agent.action.started` | intent validated, execution begins | `{actionId, actorId, type, params, decisionId?}` |
 | `agent.action.completed` | executor done | `{actionId, resultSummary, resultEventIds}` |

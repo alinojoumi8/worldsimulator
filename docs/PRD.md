@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Approved v1.0 baseline — MVP and Phase 8 accepted through WS-805 |
+| **Status** | Approved v1.0 baseline — MVP and Phase 8 accepted through WS-805; Phase 12 Agent Lab pilot pending |
 | **Date** | 2026-07-24 |
 | **Owners** | Project owner + engineering |
 | **Related docs** | [PROJECT_STATUS.md](PROJECT_STATUS.md) · [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · [API_CONTRACTS.md](API_CONTRACTS.md) · [DOMAIN_MODEL.md](DOMAIN_MODEL.md) · [INITIAL_WORLD.md](INITIAL_WORLD.md) · [TASK_BACKLOG.md](TASK_BACKLOG.md) · [adr/](adr/README.md) |
@@ -379,7 +379,8 @@ MVP screens (smallest useful subset — M23, Phase 7):
 
 - **V1 (Phases 8–10):** VC & investments (FR-INV), call-auction stock market (FR-SEC-1), government policy agents + rule-based monetary authority (FR-GOV-3), run comparison UI, wage negotiation, news consumption effects (FR-NWS-3), multiple banks.
 - **LATER:** elections & political groups (FR-GOV-4); housing & real-estate market; demographics (aging, households forming/dissolving); skills & education progression; commodity markets & energy capacity (FR-NRG-2); multi-town regions & migration; public read-only sharing; Postgres deployment; researcher scripting API (sandboxed).
-- **NOT-YET (do not build without re-approval):** continuous order books/derivatives/shorting (FR-SEC-2); real-money or real-market data integration; calibration claims against real economies; autonomous LLM control of policy without menus; multi-tenant SaaS. Citizen/agent tool-use, connectors and real accounts are excluded from MVP, V1 and Phase 11. Only after WS-1106 may a separate discovery plan consider a self-hosted, open-source, provider-neutral tool layer; the current architecture reserves no connector tickets or dependencies.
+- **Phase 12 research extension:** the approved Agent Lab permits only loopback, trial-bound, menu-constrained citizen decisions through the four WorldTangle tools documented in [PHASE_12_AGENT_LAB.md](PHASE_12_AGENT_LAB.md). It is outside MVP/V1 and cannot replace the Riverbend release baseline. General shell, browser, filesystem, delegation, arbitrary connectors, real accounts, and autonomous policy authority remain prohibited.
+- **NOT-YET (do not build without re-approval):** continuous order books/derivatives/shorting (FR-SEC-2); real-money or real-market data integration; calibration claims against real economies; autonomous LLM control of policy without menus; multi-tenant SaaS; general-purpose citizen tools, connectors, and real external accounts.
 
 ## 27. Risks and open questions
 

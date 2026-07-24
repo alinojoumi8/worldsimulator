@@ -1,9 +1,11 @@
 /** Hash-neutral replay control-plane persistence (WS-705). */
 
 import {
+  agentLabActionChoiceSchema,
   canonicalParse,
   canonicalStringify,
   EngineError,
+  hashValue,
   llmCallRecordSchema,
   replayDivergenceSchema,
   replayRunSchema,
@@ -11,6 +13,7 @@ import {
   type ReplayDivergenceKind,
   type ReplayMode,
   type ReplayRun,
+  type AgentLabActionChoice,
   type LlmCallRecord,
 } from "@worldtangle/shared";
 import { toSafeNumber, type WorldDatabase } from "./database";
@@ -49,6 +52,25 @@ interface CountRow {
 
 interface ReplayLlmExpectationRow {
   record_canonical: string;
+}
+
+interface ReplayAgentLabSubmissionRow {
+  request_hash: string;
+  source_event_id: string;
+  proposal_digest: string;
+  proposal_canonical: string;
+}
+
+export interface ReplayAgentLabSubmissionInput {
+  readonly requestHash: string;
+  readonly sourceEventId: string;
+  readonly proposalDigest: string;
+  readonly proposal: AgentLabActionChoice;
+}
+
+export interface ReplayAgentLabSubmissionExpectation
+  extends ReplayAgentLabSubmissionInput {
+  readonly ordinal: number;
 }
 
 export interface CreateReplayRecordInput {
@@ -197,6 +219,77 @@ export class SqliteReplayStore {
         });
       }
     }).immediate();
+  }
+
+  importAgentLabSubmissions(records: readonly ReplayAgentLabSubmissionInput[]): void {
+    const insert = this.db.prepare(`
+      INSERT INTO replay_agent_lab_submissions(
+        run_id, ordinal, request_hash, source_event_id,
+        proposal_digest, proposal_canonical
+      ) VALUES (
+        @runId, @ordinal, @requestHash, @sourceEventId,
+        @proposalDigest, @proposalCanonical
+      )
+    `);
+    this.db.transaction(() => {
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index]!;
+        const proposal = agentLabActionChoiceSchema.parse(record.proposal);
+        if (hashValue(proposal) !== record.proposalDigest) {
+          throw new EngineError(
+            "CONFLICT",
+            "recorded Agent Lab proposal digest changed before replay import",
+          );
+        }
+        insert.run({
+          runId: this.runId,
+          ordinal: index + 1,
+          requestHash: record.requestHash,
+          sourceEventId: record.sourceEventId,
+          proposalDigest: record.proposalDigest,
+          proposalCanonical: canonicalStringify(proposal),
+        });
+      }
+    }).immediate();
+  }
+
+  agentLabSubmissionAt(ordinal: number): ReplayAgentLabSubmissionExpectation | null {
+    if (!Number.isSafeInteger(ordinal) || ordinal <= 0) {
+      throw new EngineError(
+        "VALIDATION_FAILED",
+        "replay Agent Lab submission ordinal must be positive",
+      );
+    }
+    const row = this.db.prepare<
+      [string, number],
+      ReplayAgentLabSubmissionRow
+    >(`
+      SELECT request_hash, source_event_id, proposal_digest, proposal_canonical
+      FROM replay_agent_lab_submissions
+      WHERE run_id = ? AND ordinal = ?
+    `).get(this.runId, ordinal);
+    if (row === undefined) return null;
+    try {
+      const parsed = canonicalParse(row.proposal_canonical);
+      if (canonicalStringify(parsed) !== row.proposal_canonical) {
+        throw new Error("proposal is not canonical");
+      }
+      const proposal = agentLabActionChoiceSchema.parse(parsed);
+      if (hashValue(proposal) !== row.proposal_digest) {
+        throw new Error("proposal digest does not match");
+      }
+      return Object.freeze({
+        ordinal,
+        requestHash: row.request_hash,
+        sourceEventId: row.source_event_id,
+        proposalDigest: row.proposal_digest,
+        proposal,
+      });
+    } catch (error) {
+      throw new EngineError("INTERNAL", "persisted replay Agent Lab submission is invalid", {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   nextLlmExpectationOrdinal(): number {

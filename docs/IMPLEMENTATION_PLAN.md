@@ -436,10 +436,17 @@ Rules: each phase ends **runnable + tests green**; no phase starts before its de
 - **Exit criteria:** 1,000 agents × 360 ticks mock run under target wall-clock with green invariants; comparison view ships.
 - **Deps:** Phase 7+ (comparisons meaningful). **Risks:** SQLite write ceiling (measure; Postgres seam ready per ADR-0004).
 
-After Phase 11 and WS-1106 are complete, a separate approved discovery effort
-may evaluate a self-hosted, open-source, provider-neutral citizen-tool layer.
-MVP, V1 and Phase 11 include no connector dependency, external-account access,
-tool-execution surface or reserved integration ticket.
+### Phase 12 — Agent laboratory and realism harness [Research]
+
+- **Status (2026-07-24):** implementation foundation present on the Agent Lab feature branch; real-Hermes pilot and release gate remain open.
+- **Goal:** measure bounded external citizen decisions without weakening WorldTangle's single-writer, replay, privacy, or evidence guarantees.
+- **Architecture:** optional manifest-pinned `native|shadow|external` routing around the existing provider seam; deterministic cohort selection; loopback-only four-tool REST/MCP boundary; hash-neutral shadow sidecar; active causal-input events; existing Tier-2 validation and module-owned executors; strict offline replay.
+- **Harness:** clean-checkout manifest generation, fresh study/trial isolation, one persistent Hermes profile/session per citizen, `/v1/runs` automation, eight-iteration limit, exact prompt/tool pins, sanitized checksummed artifacts, taint exclusion, vector scorecards, and a blinded optional judge that is never a release oracle.
+- **Realism sequence:** partial observation first; then daily commitments, structured plans, cited reflection, numeric expectations, and relationship-mediated diffusion, one manifested condition at a time.
+- **Tests:** schema and boundary rejection, revocation/idempotency/isolation, shadow state/event-hash invariance, normal action-validator use, offline replay equality, artifact drift/corruption/isolation, and the explicit production pilot.
+- **Exit criteria:** three frozen seeds × 60 ticks × eight citizens; per seed one native plus three shadow and three active attempts; terminal receipts; all active invariants green; no unauthorized apply; zero replay divergences; no included tainted trial.
+- **Boundary:** no shell, browser, filesystem, delegation, unrestricted MCP, arbitrary connectors, real accounts, real-money integration, or national-calibration claim.
+- **Reference:** [Phase 12 Agent Lab](PHASE_12_AGENT_LAB.md) and [ODD study record](ODD_AGENT_LAB.md).
 
 ---
 

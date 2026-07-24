@@ -7,7 +7,13 @@
  */
 
 import { canonicalStringify, fnv1a32, sha256Hex } from "@worldtangle/shared";
-import type { LlmModuleId } from "@worldtangle/shared";
+import type {
+  AgentLabController,
+  AgentScopedObservation,
+  DecisionOption,
+  LlmModuleId,
+  TriggerSignal,
+} from "@worldtangle/shared";
 import type { z } from "zod";
 
 export interface LlmRequest {
@@ -37,6 +43,28 @@ export interface LlmRequest {
   options?: readonly unknown[];
   maxOutputTokens?: number;
   budgetTag: string;
+  /**
+   * Operational Agent Lab context. It is excluded from the ordinary request
+   * hash so native and shadow trials remain byte-identical to their controls.
+   */
+  agentLab?: Readonly<{
+    simulationId: string;
+    runId: string;
+    studyId: string;
+    trialId: string;
+    controller: AgentLabController;
+    opportunityKey: string;
+    trigger: TriggerSignal;
+    completedTick: number;
+    targetTick: number;
+    observation: AgentScopedObservation;
+    offeredOptions: readonly DecisionOption[];
+    driverPolicyDigest: string;
+    promptDigest: string;
+    toolSchemaDigest: string;
+  }>;
+  /** Optional cache salt used only by authoritative external decisions. */
+  cacheScope?: string;
 }
 
 export interface LlmSuccess {
@@ -165,6 +193,7 @@ export function llmRequestHash(request: LlmRequest): string {
       schemaVersion: request.schemaVersion,
       options: request.options ?? null,
       maxOutputTokens: request.maxOutputTokens ?? null,
+      ...(request.cacheScope === undefined ? {} : { cacheScope: request.cacheScope }),
     }),
   );
 }
