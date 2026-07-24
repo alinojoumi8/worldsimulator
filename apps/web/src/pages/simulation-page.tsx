@@ -26,9 +26,10 @@ import {
   StepForward,
   Waypoints,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAppSession } from "../app-session";
 import { IndicatorSparkline } from "../components/indicator-sparkline";
+import { RunHandoff } from "../components/run-handoff";
 import { ErrorNotice, LoadingPanel, MetricCard, StatusPill } from "../components/ui";
 import { WorldEventInjector } from "../components/world-event-injector";
 import { useSimulationStream } from "../hooks/use-simulation-stream";
@@ -130,6 +131,8 @@ function streamLabel(state: string): string {
 
 export function SimulationPage() {
   const simulationId = useParams().simId ?? "invalid";
+  const [searchParams] = useSearchParams();
+  const guided = searchParams.get("guided") === "causal-shock-v1";
   const { api, token } = useAppSession();
   const queryClient = useQueryClient();
   const [streamDigest, setStreamDigest] = useState<{
@@ -151,6 +154,59 @@ export function SimulationPage() {
     queryKey: ["events", simulationId, runId, token],
     queryFn: ({ signal }) => api.listEvents(simulationId, runId, signal),
     enabled: runId !== undefined,
+    refetchInterval: status.data?.run.status === "running" ? 2_000 : false,
+  });
+  const injectedEvents = useQuery({
+    queryKey: ["events", simulationId, runId, "world.event.injected", token],
+    queryFn: ({ signal }) => api.listEvents(
+      simulationId,
+      runId,
+      signal,
+      { limit: 200, type: "world.event.injected" },
+    ),
+    enabled: runId !== undefined,
+    refetchInterval: status.data?.run.status === "running" ? 2_000 : false,
+  });
+  const appliedEvents = useQuery({
+    queryKey: ["events", simulationId, runId, "world.event.applied", token],
+    queryFn: ({ signal }) => api.listEvents(
+      simulationId,
+      runId,
+      signal,
+      { limit: 200, type: "world.event.applied" },
+    ),
+    enabled: runId !== undefined,
+    refetchInterval: status.data?.run.status === "running" ? 2_000 : false,
+  });
+  const latestAppliedCorrelation = appliedEvents.data?.items.reduce<
+    { readonly seq: number; readonly correlationId: string } | undefined
+  >(
+    (latest, event) => latest === undefined || event.seq > latest.seq
+      ? { seq: event.seq, correlationId: event.correlationId }
+      : latest,
+    undefined,
+  )?.correlationId;
+  const causalThreadEvents = useQuery({
+    queryKey: [
+      "events",
+      simulationId,
+      runId,
+      "causal-thread",
+      latestAppliedCorrelation,
+      token,
+    ],
+    queryFn: ({ signal }) => api.listEvents(
+      simulationId,
+      runId,
+      signal,
+      {
+        limit: 200,
+        ...(latestAppliedCorrelation === undefined
+          ? {}
+          : { correlationId: latestAppliedCorrelation }),
+      },
+    ),
+    enabled: runId !== undefined && latestAppliedCorrelation !== undefined,
     refetchInterval: status.data?.run.status === "running" ? 2_000 : false,
   });
   const indicators = useQuery({
@@ -238,6 +294,33 @@ export function SimulationPage() {
     const value = (budgets as Record<string, unknown>)["runCostCentsMax"];
     return typeof value === "string" ? value : undefined;
   }, [scenario]);
+  const handoffEvents = useMemo(() => {
+    const byId = new Map(
+      [
+        ...(events.data?.items ?? []),
+        ...(injectedEvents.data?.items ?? []),
+        ...(appliedEvents.data?.items ?? []),
+        ...(causalThreadEvents.data?.items ?? []),
+      ].map((event) => [event.eventId, event] as const),
+    );
+    return [...byId.values()];
+  }, [
+    appliedEvents.data?.items,
+    causalThreadEvents.data?.items,
+    events.data?.items,
+    injectedEvents.data?.items,
+  ]);
+  const latestAppliedTick = handoffEvents
+    .filter((event) => event.type === "world.event.applied")
+    .reduce<number | undefined>(
+      (latest, event) => latest === undefined ? event.tick : Math.max(latest, event.tick),
+      undefined,
+    );
+  const cpiObserved = latestAppliedTick !== undefined && (
+    indicators.data?.series
+      .find((series) => series.name === "cpi")
+      ?.points.some(([tick]) => tick > latestAppliedTick) ?? false
+  );
 
   if (detail.isPending || status.isPending) {
     return <div className="cockpit-page"><LoadingPanel label="Tracing this world’s state…" /></div>;
@@ -282,6 +365,20 @@ export function SimulationPage() {
         </div>
       </header>
 
+      <RunHandoff
+        simulationId={simulationId}
+        runId={runId}
+        runStatus={runStatus}
+        mode={status.data.llm.mode}
+        seed={String(scenario?.["seed"] ?? "unknown")}
+        currentTick={currentTick}
+        endTick={endTick}
+        latestEventSeq={status.data.activity.latestEventSeq}
+        events={handoffEvents}
+        cpiObserved={cpiObserved}
+        guided={guided}
+      />
+
       <section className="world-explorer-callout" aria-label="World explorer">
         <Waypoints size={22} />
         <div>
@@ -301,7 +398,11 @@ export function SimulationPage() {
         </div>
       </section>
 
-      <section className="run-console" aria-label="Simulation controls and progress">
+      <section
+        className="run-console"
+        id="run-controls"
+        aria-label="Simulation controls and progress"
+      >
         <div className="run-progress">
           <div className="run-progress__numbers">
             <div><span>Current tick</span><strong>{currentTick}</strong></div>
@@ -353,6 +454,7 @@ export function SimulationPage() {
       <WorldEventInjector
         runId={runId}
         runStatus={runStatus}
+        guided={guided}
         pending={injectEvent.isPending}
         {...(injectEvent.error === null ? {} : { failure: errorMessage(injectEvent.error) })}
         {...(injectEvent.data === undefined ? {} : { receipt: injectEvent.data })}

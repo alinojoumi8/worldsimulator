@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   EventListResponse,
@@ -21,8 +21,9 @@ import {
   StepForward,
   Waypoints,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAppSession } from "../app-session";
+import { EvidencePath } from "../components/evidence-path";
 import { ErrorNotice, LoadingPanel, StatusPill } from "../components/ui";
 import { errorMessage } from "../lib/api-client";
 
@@ -438,17 +439,51 @@ function optionalTick(value: string): number | undefined {
 
 export function NewsExplorerPage() {
   const simulationId = useParams().simId ?? "invalid";
+  const [searchParams] = useSearchParams();
+  const routeCorrelation = searchParams.get("correlation")?.trim() ?? "";
+  const routeFromTick = searchParams.get("fromTick")?.trim() ?? "";
+  const routeToTick = searchParams.get("toTick")?.trim() ?? "";
+  const routeFocusKind = searchParams.get("focusKind") === "transaction"
+    ? "transaction"
+    : "event";
+  const routeFocusId = searchParams.get("focusId")?.trim() ?? "";
+  const routeStoryId = searchParams.get("story")?.trim() ?? "";
+  const initialFromTick = optionalTick(routeFromTick);
+  const initialToTick = optionalTick(routeToTick);
   const { api, token } = useAppSession();
   const queryClient = useQueryClient();
-  const [selectedStoryId, setSelectedStoryId] = useState<string>();
+  const appliedRouteFocus = useRef("");
+  const [selectedStoryId, setSelectedStoryId] = useState<string | undefined>(
+    routeStoryId.length === 0 ? undefined : routeStoryId,
+  );
   const [selection, setSelection] = useState<ExplorerSelection>();
   const [activeReplayId, setActiveReplayId] = useState<string>();
   const [typeDraft, setTypeDraft] = useState("");
-  const [correlationDraft, setCorrelationDraft] = useState("");
-  const [fromDraft, setFromDraft] = useState("");
-  const [toDraft, setToDraft] = useState("");
+  const [correlationDraft, setCorrelationDraft] = useState(routeCorrelation);
+  const [fromDraft, setFromDraft] = useState(routeFromTick);
+  const [toDraft, setToDraft] = useState(routeToTick);
   const [filterFailure, setFilterFailure] = useState<string>();
-  const [filters, setFilters] = useState<AppliedExplorerFilters>({});
+  const [filters, setFilters] = useState<AppliedExplorerFilters>({
+    ...(routeCorrelation.length === 0 ? {} : { correlationId: routeCorrelation }),
+    ...(initialFromTick === undefined ? {} : { fromTick: initialFromTick }),
+    ...(initialToTick === undefined ? {} : { toTick: initialToTick }),
+  });
+
+  useEffect(() => {
+    const fromTick = optionalTick(routeFromTick);
+    const toTick = optionalTick(routeToTick);
+    setCorrelationDraft(routeCorrelation);
+    setFromDraft(routeFromTick);
+    setToDraft(routeToTick);
+    setFilters({
+      ...(routeCorrelation.length === 0 ? {} : { correlationId: routeCorrelation }),
+      ...(fromTick === undefined ? {} : { fromTick }),
+      ...(toTick === undefined ? {} : { toTick }),
+    });
+    setSelectedStoryId(routeStoryId.length === 0 ? undefined : routeStoryId);
+    setSelection(undefined);
+    appliedRouteFocus.current = "";
+  }, [routeCorrelation, routeFromTick, routeStoryId, routeToTick]);
 
   const detail = useQuery({
     queryKey: ["simulation", simulationId, token],
@@ -485,6 +520,38 @@ export function NewsExplorerPage() {
     }),
     enabled: runId !== undefined,
   });
+  useEffect(() => {
+    if (routeFocusId.length === 0) return;
+    const routeKey = `${routeFocusKind}:${routeFocusId}`;
+    if (appliedRouteFocus.current === routeKey) return;
+    if (routeFocusKind === "transaction") {
+      const transaction = transactions.data?.items.find((item) => item.id === routeFocusId);
+      if (transaction === undefined) return;
+      setSelection({
+        kind: "transaction",
+        id: transaction.id,
+        eventId: transaction.sourceEventId,
+        correlationId: transaction.correlationId,
+        label: transaction.kind,
+      });
+    } else {
+      const event = events.data?.items.find((item) => item.eventId === routeFocusId);
+      if (event === undefined) return;
+      setSelection({
+        kind: "event",
+        id: event.eventId,
+        eventId: event.eventId,
+        correlationId: event.correlationId,
+        label: event.type,
+      });
+    }
+    appliedRouteFocus.current = routeKey;
+  }, [
+    events.data?.items,
+    routeFocusId,
+    routeFocusKind,
+    transactions.data?.items,
+  ]);
   const causeEvents = useQuery({
     queryKey: ["cause-events", simulationId, runId, selection?.correlationId, token],
     queryFn: ({ signal }) => api.listEvents(simulationId, runId, signal, {
@@ -541,6 +608,7 @@ export function NewsExplorerPage() {
   const emptyEvents: EventListResponse = { items: [], nextCursor: null, meta: { simulated: true, apiVersion: 1 } };
   const emptyTransactions: TransactionListResponse = { items: [], nextCursor: null, meta: { simulated: true, apiVersion: 1 } };
   const activeReplay = replayStatus.data?.replay ?? replay.data?.replayRun ?? null;
+  const evidenceCorrelation = selection?.correlationId ?? filters.correlationId;
 
   return (
     <div className="news-explorer-page">
@@ -567,6 +635,14 @@ export function NewsExplorerPage() {
 
       {events.error === null && transactions.error === null ? null : <ErrorNotice title="Explorer read failed" message={errorMessage(events.error ?? transactions.error)} onRetry={() => { void Promise.all([events.refetch(), transactions.refetch()]); }} />}
       <CausalityExplorer events={events.data ?? emptyEvents} transactions={transactions.data ?? emptyTransactions} selection={selection} causeEvents={causeEvents.data?.items ?? []} causePending={causeEvents.isPending && selection !== undefined} onSelect={setSelection} />
+      {evidenceCorrelation === undefined || runId === undefined ? null : (
+        <EvidencePath
+          simulationId={simulationId}
+          correlationId={evidenceCorrelation}
+          runId={runId}
+          title="Selected record evidence"
+        />
+      )}
       <ReplayStepper runs={detail.data.runs} activeReplay={activeReplay} pending={replay.isPending} failure={replay.error === null ? undefined : errorMessage(replay.error)} onStart={(sourceRunId, toTick, mode) => replay.mutate({ sourceRunId, toTick, mode })} />
     </div>
   );

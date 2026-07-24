@@ -82,6 +82,55 @@ export const investmentCapTablePathSchema = z.object({
   companyId: ventureTargetCompanyIdSchema,
 }).strict();
 
+export const evidencePathCorrelationSchema = z.string().trim().min(1).max(160);
+
+export const evidencePathPathSchema = z.object({
+  simId: simulationIdSchema,
+  correlationId: evidencePathCorrelationSchema,
+}).strict();
+
+export const evidencePathLaneStateSchema = z.enum([
+  "booked",
+  "pending",
+  "no_effect",
+  "broken_link",
+]);
+
+export const evidencePathReferenceKindSchema = z.enum([
+  "event",
+  "state",
+  "transaction",
+  "cap_table",
+  "proposal",
+  "investment",
+  "distribution",
+  "news",
+]);
+
+export const evidencePathReferenceSchema = z.object({
+  kind: evidencePathReferenceKindSchema,
+  id: z.string().trim().min(1).max(160),
+  label: z.string().trim().min(1).max(240),
+  tick: nonnegativeInteger,
+  eventId: eventIdSchema.nullable(),
+  correlationId: evidencePathCorrelationSchema.nullable(),
+}).strict();
+
+export const evidencePathLaneSchema = z.object({
+  state: evidencePathLaneStateSchema,
+  label: z.string().trim().min(1).max(120),
+  explanation: z.string().trim().min(1).max(500),
+  items: z.array(evidencePathReferenceSchema).max(200),
+}).strict();
+
+export const evidencePathResponseSchema = z.object({
+  correlationId: evidencePathCorrelationSchema,
+  origin: evidencePathLaneSchema,
+  booked: evidencePathLaneSchema,
+  downstream: evidencePathLaneSchema,
+  meta: apiMetaSchema,
+}).strict();
+
 export const investmentNamedAgentSchema = z.object({
   id: agentIdSchema,
   name: z.string().trim().min(1).max(120),
@@ -317,6 +366,10 @@ export const investmentDetailResponseSchema = z.object({
 }).strict();
 
 export type InvestmentRunQuery = z.infer<typeof investmentRunQuerySchema>;
+export type EvidencePathLaneState = z.infer<typeof evidencePathLaneStateSchema>;
+export type EvidencePathReference = z.infer<typeof evidencePathReferenceSchema>;
+export type EvidencePathLane = z.infer<typeof evidencePathLaneSchema>;
+export type EvidencePathResponse = z.infer<typeof evidencePathResponseSchema>;
 export type InvestmentProposalListQuery = z.infer<typeof investmentProposalListQuerySchema>;
 export type InvestmentListQuery = z.infer<typeof investmentListQuerySchema>;
 export type InvestmentDistributionListQuery = z.infer<

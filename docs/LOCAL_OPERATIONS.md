@@ -20,16 +20,22 @@ The built dashboard and API then share `http://127.0.0.1:4000`.
 
 Both server entry points automatically load an existing repository-root `.env` through Node's `--env-file-if-exists` option. Copy names from `.env.example`; never commit `.env` or provider keys. Test and gate commands do not load the file automatically.
 
-## Live and mock creation
+## Guided, custom, and live creation
 
-The dashboard's create form defaults to:
+The dashboard's first-run guided form defaults to:
 
-- live mode, with Tier 2 routed to `MiniMax-M3`;
-- seed 42 and a 360-tick end boundary;
+- deterministic mock mode with no provider requests;
+- seed 42 and a 31-tick end boundary;
 - a 500-cent run-cost ceiling; and
 - 128,000 per-agent daily tokens.
 
-Select **Mock · deterministic** when an offline, repeatable run is desired. Mock mode performs no provider requests. CLI examples in the root README deliberately use mock mode for the same reason.
+The guided fixture schedules one bounded fuel shock and is described in the
+[user-testing brief](USER_TESTING.md). **Set up a custom simulation** restores
+the 360-tick baseline. The guided fixture locks deterministic mock mode; Live
+`MiniMax-M3` remains available from the custom form as an advanced opt-in
+choice, where selecting it surfaces the credential, latency, cost, and
+reproducibility warning. CLI examples in the root README deliberately use mock
+mode for the same reason.
 
 Live mode requires `MINIMAX_API_KEY` or `MINIMAX_TOKEN_PLAN_KEY`. Tier-3 conversations route to Kimi only when one is opened; `KIMI_API_KEY` selects the Kimi Code route and `MOONSHOT_API_KEY` selects the Moonshot Open Platform route. The exact routing and price-pin variables are documented in `.env.example` and [WS-601 provider evidence](WS_601_MINIMAX_KIMI_PROVIDERS.md).
 

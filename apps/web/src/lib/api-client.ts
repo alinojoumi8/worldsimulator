@@ -15,11 +15,19 @@ import {
   createSimulationResponseSchema,
   eventListResponseSchema,
   errorListResponseSchema,
+  evidencePathResponseSchema,
   goodsMarketResponseSchema,
   indicatorSeriesResponseSchema,
   injectWorldEventResponseSchema,
   institutionDetailResponseSchema,
   institutionListResponseSchema,
+  investmentCapTableResponseSchema,
+  investmentDetailResponseSchema,
+  investmentDistributionDetailResponseSchema,
+  investmentDistributionListResponseSchema,
+  investmentListResponseSchema,
+  investmentProposalDetailResponseSchema,
+  investmentProposalListResponseSchema,
   jobDetailResponseSchema,
   jobListResponseSchema,
   loanDetailResponseSchema,
@@ -49,12 +57,20 @@ import {
   type CreateSimulationResponse,
   type EventListResponse,
   type ErrorListResponse,
+  type EvidencePathResponse,
   type GoodsMarketResponse,
   type IndicatorSeriesResponse,
   type InjectWorldEventRequest,
   type InjectWorldEventResponse,
   type InstitutionDetailResponse,
   type InstitutionListResponse,
+  type InvestmentCapTableResponse,
+  type InvestmentDetailResponse,
+  type InvestmentDistributionDetailResponse,
+  type InvestmentDistributionListResponse,
+  type InvestmentListResponse,
+  type InvestmentProposalDetailResponse,
+  type InvestmentProposalListResponse,
   type JobDetailResponse,
   type JobListResponse,
   type LoanDetailResponse,
@@ -461,6 +477,118 @@ export class WorldTangleApi {
     return this.request(
       `/api/v1/simulations/${encodeURIComponent(simulationId)}/companies/${encodeURIComponent(companyId)}${query}`,
       companyDetailResponseSchema,
+      { signal },
+    );
+  }
+
+  listInvestmentProposals(
+    simulationId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentProposalListResponse> {
+    const params = new URLSearchParams({ limit: "100" });
+    if (runId !== undefined) params.set("runId", runId);
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investment-proposals?${params}`,
+      investmentProposalListResponseSchema,
+      { signal },
+    );
+  }
+
+  getInvestmentProposal(
+    simulationId: string,
+    proposalId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentProposalDetailResponse> {
+    const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investment-proposals/${encodeURIComponent(proposalId)}${query}`,
+      investmentProposalDetailResponseSchema,
+      { signal },
+    );
+  }
+
+  listInvestments(
+    simulationId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentListResponse> {
+    const params = new URLSearchParams({ limit: "100" });
+    if (runId !== undefined) params.set("runId", runId);
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investments?${params}`,
+      investmentListResponseSchema,
+      { signal },
+    );
+  }
+
+  getInvestment(
+    simulationId: string,
+    investmentId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentDetailResponse> {
+    const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investments/${encodeURIComponent(investmentId)}${query}`,
+      investmentDetailResponseSchema,
+      { signal },
+    );
+  }
+
+  getInvestmentCapTable(
+    simulationId: string,
+    companyId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentCapTableResponse> {
+    const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/companies/${encodeURIComponent(companyId)}/cap-table${query}`,
+      investmentCapTableResponseSchema,
+      { signal },
+    );
+  }
+
+  listInvestmentDistributions(
+    simulationId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentDistributionListResponse> {
+    const params = new URLSearchParams({ limit: "100" });
+    if (runId !== undefined) params.set("runId", runId);
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investment-distributions?${params}`,
+      investmentDistributionListResponseSchema,
+      { signal },
+    );
+  }
+
+  getInvestmentDistribution(
+    simulationId: string,
+    distributionId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<InvestmentDistributionDetailResponse> {
+    const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/investment-distributions/${encodeURIComponent(distributionId)}${query}`,
+      investmentDistributionDetailResponseSchema,
+      { signal },
+    );
+  }
+
+  getEvidencePath(
+    simulationId: string,
+    correlationId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<EvidencePathResponse> {
+    const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+    return this.request(
+      `/api/v1/simulations/${encodeURIComponent(simulationId)}/evidence-paths/${encodeURIComponent(correlationId)}${query}`,
+      evidencePathResponseSchema,
       { signal },
     );
   }

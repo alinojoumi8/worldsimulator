@@ -100,6 +100,7 @@ import {
   SqliteAgentStore,
   SqliteApiTaskStore,
   SqliteCreditReadStore,
+  SqliteEvidencePathReadStore,
   SqliteEventStore,
   SqliteEnergyStore,
   SqliteExportStore,
@@ -1549,6 +1550,7 @@ export class SimulationService implements SimulationApi {
             params: input.params,
             scheduledTick,
             source: "admin",
+            catalogVersion: WORLD_EVENT_CATALOG_VERSION,
           },
         });
         const worldEvent = worldEventSchema.parse({
@@ -2012,6 +2014,17 @@ export class SimulationService implements SimulationApi {
     return this.withDatabase(location, (db) => ({
       capTable: new SqliteInvestmentReadStore(db, location.runId).capTable(companyId),
     }));
+  }
+
+  getEvidencePath(
+    simulationId: string,
+    correlationId: string,
+    runId?: string,
+  ) {
+    const location = this.locator.locate(simulationId, runId);
+    return this.withDatabase(location, (db) =>
+      new SqliteEvidencePathReadStore(db, location.runId).resolve(correlationId)
+    );
   }
 
   listInvestmentDistributions(
@@ -3563,6 +3576,7 @@ export class SimulationService implements SimulationApi {
           params: input.params,
           scheduledTick,
           source: "admin",
+          catalogVersion: WORLD_EVENT_CATALOG_VERSION,
         },
       });
       const worldEvent = worldEventSchema.parse({

@@ -75,7 +75,12 @@ This is the canonical index for the repository's documentation. Current-state do
 - [WS-802 proposal pipeline](WS_802_INVESTMENT_PROPOSAL_PIPELINE.md)
 - [WS-803 cap-table closing](WS_803_CAP_TABLE_CLOSING.md)
 - [WS-804 investment distributions](WS_804_INVESTMENT_DISTRIBUTIONS.md)
-- [WS-805 Investment Explorer](WS_805_INVESTMENT_EXPLORER.md) — backend read slice in progress; UI and Phase 8 gate remain open.
+- [WS-805 Investment Explorer](WS_805_INVESTMENT_EXPLORER.md) — complete; Phase 8 accepted.
+
+### User testing
+
+- [Guided causal test](USER_TESTING.md) — controlled mock pilot, tester brief,
+  evidence states, receipt handoff, and known boundaries.
 
 ## Maintenance rule
 
