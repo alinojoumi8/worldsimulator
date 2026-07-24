@@ -80,7 +80,11 @@ test("creates Riverbend and traces a shock from citizens and credit into CPI", a
 });
 
 test("opens a negotiated investment close through exact cap-table evidence", async ({ page }) => {
-  test.setTimeout(360_000);
+  // A hosted Windows runner can take several minutes to advance the mock
+  // world. Keep each synchronous request small enough to avoid a connection
+  // reset under CPU contention while allowing the full evidence path to
+  // finish within the test budget.
+  test.setTimeout(900_000);
   await page.goto("/");
   await page.getByRole("button", { name: "Set up a custom simulation" }).click();
   await expect(page.getByRole("heading", { name: "Create a simulation" })).toBeVisible();
@@ -107,12 +111,12 @@ test("opens a negotiated investment close through exact cap-table evidence", asy
   };
   let currentTick = status.run.currentTick;
   while (currentTick < status.run.endTick) {
-    const ticks = Math.min(50, status.run.endTick - currentTick);
+    const ticks = Math.min(10, status.run.endTick - currentTick);
     const response = await page.request.post(
       `/api/v1/simulations/${simulationId}/advance`,
       {
         data: { runId: status.run.id, ticks },
-        timeout: 60_000,
+        timeout: 180_000,
       },
     );
     expect(response.ok()).toBe(true);
