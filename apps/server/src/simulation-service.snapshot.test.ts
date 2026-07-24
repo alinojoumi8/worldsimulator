@@ -220,9 +220,7 @@ describe("SimulationService periodic snapshots", () => {
     } finally {
       db.close();
     }
-  // Hosted Windows runners can need longer than the default Vitest timeout
-  // while a durable 51-tick advance creates and verifies each snapshot.
-  }, 60_000);
+  }, 15_000);
 
   it("serializes run mutations while an asynchronous backup is in flight", async () => {
     const { service } = createService(1);
