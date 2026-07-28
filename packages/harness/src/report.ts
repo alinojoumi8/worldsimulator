@@ -24,7 +24,7 @@ import {
 } from "./fixture-matrix";
 import {
   experimentManifestDigest,
-  validateArchivedExperimentManifest,
+  validateExperimentManifest,
 } from "./manifest";
 
 interface MetricAggregate {
@@ -169,7 +169,12 @@ function matchesFixtureMatrix(
   expectedCount: number,
   expectedKeys: readonly string[],
 ): boolean {
-  const actualKeys = observedFixtureMatrixKeys(entries);
+  let actualKeys: readonly string[];
+  try {
+    actualKeys = observedFixtureMatrixKeys(entries);
+  } catch {
+    return false;
+  }
   return entries.length === expectedCount &&
     new Set(identities).size === entries.length &&
     new Set(actualKeys).size === actualKeys.length &&
@@ -534,7 +539,7 @@ export function releaseIssues(
 
 export function reportStudy(studyDirectory: string): StudyReport {
   const root = resolve(studyDirectory);
-  const manifest = validateArchivedExperimentManifest(
+  const manifest = validateExperimentManifest(
     canonicalParse(readFileSync(join(root, "manifest.json"), "utf8")),
   );
   const trialRoot = join(root, "trials");

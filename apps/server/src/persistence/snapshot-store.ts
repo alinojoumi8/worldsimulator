@@ -255,7 +255,15 @@ function logicalAgentLabProjection(
     throw new EngineError(
       "INTERNAL",
       `persisted ${field} Agent Lab configuration is not an object`,
-      { field, source, value },
+      {
+        field,
+        source,
+        valueType: value === null
+          ? "null"
+          : Array.isArray(value)
+            ? "array"
+            : typeof value,
+      },
     );
   }
   try {

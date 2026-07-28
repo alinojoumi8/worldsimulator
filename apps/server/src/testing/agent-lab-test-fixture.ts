@@ -33,6 +33,9 @@ export function buildAgentLabTestScenario(
   ) {
     throw new Error("Agent Lab test scenarios use explicit agents or a cohort, not both");
   }
+  if (options.agentIds !== undefined && options.agentIds.length === 0) {
+    throw new Error("Agent Lab test scenarios require at least one explicit agent");
+  }
   const controllerSource = options.agentIds === undefined
     ? {
         cohortSelection: {

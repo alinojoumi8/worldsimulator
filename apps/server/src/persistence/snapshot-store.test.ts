@@ -703,7 +703,7 @@ describe("SqliteSnapshotStore", () => {
     });
   });
 
-  it("reports the malformed persisted Agent Lab value and its source", () => {
+  it("reports the malformed Agent Lab value type and source without its value", () => {
     const db = track(openWorldDatabase(
       temporaryDirectory(),
       TEST_SIMULATION_ID,
@@ -724,7 +724,7 @@ describe("SqliteSnapshotStore", () => {
       details: {
         field: "simulation scenario",
         source: "scenario",
-        value: null,
+        valueType: "null",
       },
     });
   });
@@ -755,7 +755,7 @@ describe("SqliteSnapshotStore", () => {
       details: {
         field: "run manifest",
         source: "manifest",
-        value: null,
+        valueType: "null",
       },
     });
   });

@@ -169,8 +169,7 @@ function harnessTurn(
     runId: "run_00000001",
     studyId: "harness-test",
     trialId: "harness-test-shadow-a1",
-    turnId:
-      `turn_${turnDiscriminator.repeat(24).slice(0, 24).padEnd(24, "0")}`,
+    turnId: `turn_${sha256Hex(`harness-turn:${turnDiscriminator}`).slice(0, 24)}`,
     agentId,
     controller: "shadow",
     opportunityKey: `goal:${agentId}:10`,
@@ -789,12 +788,12 @@ describe("Agent Lab harness", () => {
   });
 
   it("does not escalate after Hermes exits from the requested signal", async () => {
-    let exitListener: (() => void) | undefined;
+    let closeListener: (() => void) | undefined;
     const state: { signalCode: NodeJS.Signals | null } = { signalCode: null };
     const kill = vi.fn((signal?: NodeJS.Signals | number) => {
       if (signal === "SIGTERM") {
         state.signalCode = "SIGTERM";
-        queueMicrotask(() => exitListener?.());
+        queueMicrotask(() => closeListener?.());
       }
       return true;
     });
@@ -802,7 +801,7 @@ describe("Agent Lab harness", () => {
       event: string,
       listener: () => void,
     ) => {
-      if (event === "exit") exitListener = listener;
+      if (event === "close") closeListener = listener;
     });
     const child = {
       get exitCode() {
@@ -823,12 +822,12 @@ describe("Agent Lab harness", () => {
 
   it("waits for Hermes to exit after escalating to SIGKILL", async () => {
     vi.useFakeTimers();
-    let exitListener: (() => void) | undefined;
+    let closeListener: (() => void) | undefined;
     const state: { signalCode: NodeJS.Signals | null } = { signalCode: null };
     const kill = vi.fn((signal?: NodeJS.Signals | number) => {
       if (signal === "SIGKILL") {
         state.signalCode = "SIGKILL";
-        queueMicrotask(() => exitListener?.());
+        queueMicrotask(() => closeListener?.());
       }
       return true;
     });
@@ -841,7 +840,7 @@ describe("Agent Lab harness", () => {
       },
       kill,
       once: vi.fn((event: string, listener: () => void) => {
-        if (event === "exit") exitListener = listener;
+        if (event === "close") closeListener = listener;
       }),
     } as unknown as ChildProcess;
 
@@ -2737,12 +2736,17 @@ describe("Agent Lab harness", () => {
       ...manifest(),
       driverPolicyDigest: agentLabLegacyDriverPolicyDigest(budget),
     })).toThrow(/current stable_driver_v2/);
-    const legacy = validateArchivedExperimentManifest({
+    const legacyValidation = validateArchivedExperimentManifest({
       ...manifest(),
       driverPolicyDigest: agentLabLegacyDriverPolicyDigest(budget),
     });
+    expect(legacyValidation.driverPolicyVersion).toBe("stable_driver_v1");
+    const legacy = legacyValidation.manifest;
     expect(legacy.driverPolicyDigest).toBe(
       agentLabLegacyDriverPolicyDigest(legacy.generationBudget),
+    );
+    expect(validateArchivedExperimentManifest(manifest()).driverPolicyVersion).toBe(
+      "stable_driver_v2",
     );
     const manifestRoot = mkdtempSync(
       join(tmpdir(), "worldtangle-harness-legacy-manifest-"),

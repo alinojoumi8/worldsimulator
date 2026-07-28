@@ -175,10 +175,23 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
   return validateExperimentManifestWithPolicy(input, false);
 }
 
+export interface ArchivedExperimentManifestValidation {
+  readonly manifest: ExperimentManifest;
+  readonly driverPolicyVersion: "stable_driver_v1" | "stable_driver_v2";
+}
+
 export function validateArchivedExperimentManifest(
   input: unknown,
-): ExperimentManifest {
-  return validateExperimentManifestWithPolicy(input, true);
+): ArchivedExperimentManifestValidation {
+  const manifest = validateExperimentManifestWithPolicy(input, true);
+  return Object.freeze({
+    manifest,
+    driverPolicyVersion:
+      manifest.driverPolicyDigest ===
+        agentLabDriverPolicyDigest(manifest.generationBudget)
+        ? "stable_driver_v2"
+        : "stable_driver_v1",
+  });
 }
 
 export function loadExperimentManifest(
@@ -196,7 +209,7 @@ export function loadExperimentManifest(
     );
   }
   return options.allowArchivedDriverPolicy === true
-    ? validateArchivedExperimentManifest(parsed)
+    ? validateArchivedExperimentManifest(parsed).manifest
     : validateExperimentManifest(parsed);
 }
 

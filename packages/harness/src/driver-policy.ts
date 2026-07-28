@@ -65,8 +65,25 @@ function legacyAgentLabDriverPolicy(budget: AgentLabBudget) {
     protocolVersion: "wt.agent-lab.v1",
     policyVersion: "stable_driver_v1",
     canonicalObservationWins: true,
-    allowedTools: Object.freeze([...AGENT_LAB_MCP_TOOL_NAMES]),
-    disabledCapabilities: DRIVER_DISABLED_CAPABILITIES,
+    // These literals reproduce the released v1 policy bytes. Do not derive
+    // them from current shared collections, whose ordering may evolve.
+    allowedTools: Object.freeze([
+      "wt_identity_get",
+      "wt_turn_wait",
+      "wt_action_submit",
+      "wt_receipt_get",
+    ]),
+    disabledCapabilities: Object.freeze([
+      "browser",
+      "code_execution",
+      "delegation",
+      "filesystem",
+      "general_mcp_resources",
+      "general_mcp_prompts",
+      "memory_write",
+      "shell",
+      "web",
+    ]),
     maxAgentLoopIterations: budget.maxAgentLoopIterations,
     maxInputTokens: budget.maxInputTokens,
     maxOutputTokens: budget.maxOutputTokens,

@@ -225,6 +225,16 @@ async function runMatchedArm(mode: "native" | "shadow") {
 }
 
 describe("shadow Agent Lab execution", () => {
+  it("rejects an explicitly empty test-agent assignment", () => {
+    expect(() => buildAgentLabTestScenario({
+      studyId: "empty-assignment",
+      trialId: "empty-assignment-seed-42",
+      digest,
+      mode: "native",
+      agentIds: [],
+    })).toThrow("Agent Lab test scenarios require at least one explicit agent");
+  });
+
   it("keeps authoritative state and raw event hashes unchanged", async () => {
     const control = await runShadowTrial(false);
     const submitted = await runShadowTrial(true);

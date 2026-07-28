@@ -53,6 +53,7 @@ import {
 } from "./manifest";
 import {
   hermesTurnStatsSchema,
+  redactSecrets,
   type HermesTurnStats,
 } from "./hermes";
 
@@ -116,20 +117,77 @@ function parseHermesTurnStatsEvidence(
   });
 }
 
+interface ParsedHermesRunEvidence {
+  readonly accepted: readonly HermesTurnStats[];
+  readonly rejected: readonly Readonly<{
+    index: number;
+    error: string;
+    value: unknown;
+  }>[];
+}
+
+function sanitizedRejectedHermesValue(
+  value: unknown,
+  depth = 0,
+): unknown {
+  if (depth >= 6) return "[TRUNCATED]";
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return redactSecrets(value, []).slice(0, 1_000);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((entry) =>
+      sanitizedRejectedHermesValue(entry, depth + 1)
+    );
+  }
+  if (typeof value === "object") {
+    const record = value as Readonly<Record<string, unknown>>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort(compareCodeUnit)
+        .slice(0, 100)
+        .map((key) => [
+          key,
+          /(authorization|api.?key|password|prompt|reasoning|secret|token)/i.test(key)
+            ? "[REDACTED]"
+            : sanitizedRejectedHermesValue(record[key], depth + 1),
+        ]),
+    );
+  }
+  return `[${typeof value}]`;
+}
+
 function parseHermesRunsForArtifact(
-  values: readonly HermesTurnStats[],
+  values: readonly unknown[],
   anomalies: string[],
-): readonly HermesTurnStats[] {
-  const parsed: HermesTurnStats[] = [];
+): ParsedHermesRunEvidence {
+  const accepted: HermesTurnStats[] = [];
+  const rejected: {
+    index: number;
+    error: string;
+    value: unknown;
+  }[] = [];
   for (const [index, value] of values.entries()) {
     try {
-      parsed.push(parseHermesTurnStatsEvidence(value, index));
+      accepted.push(parseHermesTurnStatsEvidence(value, index));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       anomalies.push(`Hermes runtime evidence: ${detail}`.slice(0, 900));
+      rejected.push({
+        index,
+        error: detail.slice(0, 900),
+        value: sanitizedRejectedHermesValue(value),
+      });
     }
   }
-  return Object.freeze(parsed);
+  return Object.freeze({
+    accepted: Object.freeze(accepted),
+    rejected: Object.freeze(rejected.map((entry) => Object.freeze(entry))),
+  });
 }
 
 function parseToolCallEvidence(
@@ -367,6 +425,28 @@ function fixtureHermesEvidenceFor(
       compareCodeUnit(left.agentId, right.agentId) ||
       compareCodeUnit(left.turnId, right.turnId)
     ));
+}
+
+function assertDerivedFixtureEvidence(
+  cohortAgentIds: readonly string[],
+  schedules: readonly (readonly {
+    readonly agentId: string;
+    readonly targetTick: number;
+  }[])[],
+): void {
+  const cohort = new Set(cohortAgentIds);
+  for (const schedule of schedules) {
+    const keys = observedFixtureMatrixKeys(schedule);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("fixture schedule contains a duplicate agent/tick slot");
+    }
+    const outsideCohort = schedule.find((entry) => !cohort.has(entry.agentId));
+    if (outsideCohort !== undefined) {
+      throw new Error(
+        `fixture schedule agent ${outsideCohort.agentId} is outside the recorded cohort`,
+      );
+    }
+  }
 }
 
 function lastIndicator(
@@ -700,10 +780,11 @@ export function writeTrialArtifact(
     const llm = new SqliteLlmCallStore(db, input.runId).summary();
     const cache = new SqliteLlmResponseCache(db, input.runId).exportArtifact();
     const evidenceAnomalies: string[] = [];
-    const hermesRuns = parseHermesRunsForArtifact(
+    const hermesRunEvidence = parseHermesRunsForArtifact(
       input.hermesRuns,
       evidenceAnomalies,
     );
+    const hermesRuns = hermesRunEvidence.accepted;
     const score = scorecard(
       manifest,
       plan,
@@ -730,17 +811,17 @@ export function writeTrialArtifact(
       () => store.config(),
       null,
     );
-    const cohortAgentIds = (agentLabConfig?.resolvedAssignments ?? [])
+    let cohortAgentIds = (agentLabConfig?.resolvedAssignments ?? [])
       .map((assignment) => assignment.agentId)
       .sort(compareCodeUnit);
     const persistedEvents = events.list();
-    const fixtureSchedule = captureArtifactEvidence(
+    let fixtureSchedule = captureArtifactEvidence(
       "fixture turn and receipt evidence",
       evidenceAnomalies,
       () => fixtureScheduleFor(rows.turns, rows.receipts),
       [],
     );
-    const authoritativeFixtureSchedule = captureArtifactEvidence(
+    let authoritativeFixtureSchedule = captureArtifactEvidence(
       "authoritative fixture event evidence",
       evidenceAnomalies,
       () => authoritativeFixtureScheduleFor(
@@ -749,7 +830,7 @@ export function writeTrialArtifact(
       ),
       [],
     );
-    const fixtureHermesEvidenceSchedule = captureArtifactEvidence(
+    let fixtureHermesEvidenceSchedule = captureArtifactEvidence(
       "fixture Hermes evidence",
       evidenceAnomalies,
       () => fixtureHermesEvidenceFor(
@@ -759,6 +840,25 @@ export function writeTrialArtifact(
       ),
       [],
     );
+    const derivedFixtureEvidenceIsValid = captureArtifactEvidence(
+      "derived fixture statistics",
+      evidenceAnomalies,
+      () => {
+        assertDerivedFixtureEvidence(cohortAgentIds, [
+          fixtureSchedule,
+          authoritativeFixtureSchedule,
+          fixtureHermesEvidenceSchedule,
+        ]);
+        return true;
+      },
+      false,
+    );
+    if (!derivedFixtureEvidenceIsValid) {
+      cohortAgentIds = [];
+      fixtureSchedule = [];
+      authoritativeFixtureSchedule = [];
+      fixtureHermesEvidenceSchedule = [];
+    }
     const artifactCorruptionReason = evidenceAnomalies.length === 0
       ? []
       : [{
@@ -853,6 +953,7 @@ export function writeTrialArtifact(
       externallyInfluenced: rows.externallyInfluenced,
       agentLabConfig,
       hermesRuns,
+      hermesRunsRejected: hermesRunEvidence.rejected,
     });
     writeJsonl(join(input.artifactDirectory, "agent-lab-turns.jsonl"), rows.turns);
     writeJsonl(
@@ -956,7 +1057,7 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
     const rawManifest = canonicalParse(
       readFileSync(join(root, "manifest.json"), "utf8"),
     );
-    persistedManifest = validateArchivedExperimentManifest(rawManifest);
+    persistedManifest = validateArchivedExperimentManifest(rawManifest).manifest;
     if (
       sha256Hex(canonicalStringify(rawManifest)) !==
       artifact.manifestDigest
@@ -1048,6 +1149,16 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
         runtimeBudgetViolationCount = parsedRuns.reduce(
           (sum, run) => sum + run.budgetViolations.length,
           0,
+        );
+      }
+    }
+    const rejectedRuns = runtime["hermesRunsRejected"];
+    if (rejectedRuns !== undefined) {
+      if (!Array.isArray(rejectedRuns)) {
+        issues.push("runtime rejected Hermes runs is not an array");
+      } else if (rejectedRuns.length > 0) {
+        issues.push(
+          `${rejectedRuns.length} rejected Hermes runtime evidence row(s) were preserved`,
         );
       }
     }

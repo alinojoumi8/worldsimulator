@@ -902,6 +902,7 @@ function requiredGoalCommitmentFixtureVersion(
   >;
   const fixtureVersion = trustedState["fixtureVersion"];
   if (
+    typeof fixtureVersion !== "string" ||
     state.agentLabOpportunityFixtureVersion === undefined ||
     fixtureVersion !== state.agentLabOpportunityFixtureVersion
   ) {

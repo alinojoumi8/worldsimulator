@@ -3,9 +3,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import type {
-  AgentTurnEnvelope,
-  ExperimentManifest,
+import {
+  agentTurnEnvelopeSchema,
+  type AgentTurnEnvelope,
+  type ExperimentManifest,
 } from "@worldtangle/shared";
 import { z } from "zod";
 import { CITIZEN_TURN_PROMPT } from "./driver-policy";
@@ -13,7 +14,7 @@ import { providerEnvironmentNames } from "./provider-environment";
 
 export const hermesTurnStatsSchema = z.strictObject({
   runId: z.string().min(1).max(240),
-  turnId: z.string().regex(/^turn_[0-9a-f]{24}$/).optional(),
+  turnId: agentTurnEnvelopeSchema.shape.turnId.optional(),
   opportunityKey: z.string().min(1).max(240).optional(),
   agentId: z.string().regex(/^agt_[0-9a-z]{8,}$/),
   targetTick: z.number().int().positive(),
@@ -30,6 +31,14 @@ export type HermesTurnStats = Readonly<
     readonly budgetViolations: readonly string[];
   }
 >;
+
+function validatedHermesTurnStats(value: unknown): HermesTurnStats {
+  const parsed = hermesTurnStatsSchema.parse(value);
+  return Object.freeze({
+    ...parsed,
+    budgetViolations: Object.freeze([...parsed.budgetViolations]),
+  });
+}
 
 export interface HermesEndpoint {
   readonly baseUrl: string;
@@ -285,7 +294,9 @@ export function buildHermesProfileEnvironment(
 export async function terminateHermesProcess(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
+    // `exit` can precede closure of Windows stdio/file handles. Waiting for
+    // `close` prevents profile cleanup from racing those retained handles.
+    child.once("close", () => resolve());
     child.once("error", () => resolve());
   });
   const waitForExit = async (): Promise<boolean> => {
@@ -846,7 +857,7 @@ export class HermesApiTurnDriver {
           if (!(error instanceof HermesRequestDeadlineError)) throw error;
         }
         const tokens = stoppedUsage ?? this.worstCaseUsage();
-        return Object.freeze({
+        return validatedHermesTurnStats({
           runId: hermesRunId,
           turnId: turn.turnId,
           opportunityKey: turn.opportunityKey,
@@ -967,7 +978,7 @@ export class HermesApiTurnDriver {
             tokens.inputTokens,
             tokens.outputTokens,
           );
-          return Object.freeze({
+          return validatedHermesTurnStats({
             runId: hermesRunId,
             turnId: turn.turnId,
             opportunityKey: turn.opportunityKey,
@@ -1027,7 +1038,7 @@ export class HermesApiTurnDriver {
           `${detail}; accounting failed: ${accountingDetail}`
         ).slice(0, 1_000);
       }
-      throw new HermesTurnExecutionError(Object.freeze({
+      throw new HermesTurnExecutionError(validatedHermesTurnStats({
         runId: hermesRunId,
         turnId: turn.turnId,
         opportunityKey: turn.opportunityKey,
@@ -1069,7 +1080,7 @@ export class HermesBudgetExceededError extends Error {
   }
 
   asStats(): HermesTurnStats {
-    return Object.freeze({
+    return validatedHermesTurnStats({
       runId: `budget:${this.turn.turnId}`,
       turnId: this.turn.turnId,
       opportunityKey: this.turn.opportunityKey,
