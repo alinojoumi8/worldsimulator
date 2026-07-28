@@ -292,7 +292,18 @@ export function buildHermesProfileEnvironment(
 }
 
 export async function terminateHermesProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  const processExited = (): boolean =>
+    child.exitCode !== null || child.signalCode !== null;
+  const stdioClosed = (): boolean => (
+    [child.stdin, child.stdout, child.stderr].every(
+      (stream) =>
+        stream === null ||
+        stream === undefined ||
+        stream.destroyed ||
+        stream.closed,
+    )
+  );
+  if (processExited() && stdioClosed()) return;
   const exited = new Promise<void>((resolve) => {
     // `exit` can precede closure of Windows stdio/file handles. Waiting for
     // `close` prevents profile cleanup from racing those retained handles.
@@ -313,13 +324,23 @@ export async function terminateHermesProcess(child: ChildProcess): Promise<void>
       if (timer !== undefined) clearTimeout(timer);
     }
   };
+  if (processExited()) {
+    if (await waitForExit() || stdioClosed()) return;
+    throw new Error("Hermes process exited but its stdio handles did not close");
+  }
   child.kill("SIGTERM");
   if (await waitForExit()) return;
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (processExited()) {
+    if (stdioClosed() || await waitForExit()) return;
+    throw new Error("Hermes process exited but its stdio handles did not close");
+  }
   child.kill("SIGKILL");
   if (await waitForExit()) return;
-  if (child.exitCode === null && child.signalCode === null) {
+  if (!processExited()) {
     throw new Error("Hermes process did not exit after SIGKILL");
+  }
+  if (!stdioClosed()) {
+    throw new Error("Hermes process exited after SIGKILL but its stdio handles did not close");
   }
 }
 

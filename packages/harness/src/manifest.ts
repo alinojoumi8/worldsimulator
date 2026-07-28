@@ -87,6 +87,9 @@ function validateExperimentManifestWithPolicy(
     "hermesVersion",
     "hermesPythonVersion",
     "hermesOpenAiSdkVersion",
+    "hermesMcpSdkVersion",
+    "hermesStarletteVersion",
+    "hermesAiohttpVersion",
     "providerEnvAllowlist",
   ]);
   const unknownProviderSetting = Object.keys(manifest.provider.settings).find(
@@ -123,6 +126,9 @@ function validateExperimentManifestWithPolicy(
     "hermesVersion",
     "hermesPythonVersion",
     "hermesOpenAiSdkVersion",
+    "hermesMcpSdkVersion",
+    "hermesStarletteVersion",
+    "hermesAiohttpVersion",
   ] as const) {
     const value = manifest.provider.settings[key];
     if (typeof value !== "string" || value.trim().length === 0) {

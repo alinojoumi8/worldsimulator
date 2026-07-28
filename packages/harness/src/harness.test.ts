@@ -137,6 +137,9 @@ function manifest() {
         hermesVersion: "Hermes Agent v0.18.2 (test) · upstream abcdef0",
         hermesPythonVersion: "3.11.15",
         hermesOpenAiSdkVersion: "2.24.0",
+        hermesMcpSdkVersion: "1.26.0",
+        hermesStarletteVersion: "1.3.1",
+        hermesAiohttpVersion: "3.14.1",
         providerEnvAllowlist: "MINIMAX_API_KEY",
       },
     },
@@ -779,12 +782,48 @@ describe("Agent Lab harness", () => {
     const child = {
       exitCode: null,
       signalCode: "SIGTERM",
+      stdin: null,
+      stdout: null,
+      stderr: null,
       kill,
     } as unknown as ChildProcess;
 
     await terminateHermesProcess(child);
 
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("waits for retained Hermes stdio after the process exits", async () => {
+    let closeListener: (() => void) | undefined;
+    const stderr = {
+      destroyed: false,
+      closed: false,
+    };
+    const child = {
+      exitCode: null,
+      signalCode: "SIGTERM",
+      stdin: null,
+      stdout: null,
+      stderr,
+      kill: vi.fn(),
+      once: vi.fn((event: string, listener: () => void) => {
+        if (event === "close") closeListener = listener;
+      }),
+    } as unknown as ChildProcess;
+
+    let settled = false;
+    const termination = terminateHermesProcess(child).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    stderr.destroyed = true;
+    stderr.closed = true;
+    closeListener?.();
+    await termination;
+
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("does not escalate after Hermes exits from the requested signal", async () => {
@@ -2674,8 +2713,12 @@ describe("Agent Lab harness", () => {
       providerEnvAllowlist: "MINIMAX_API_KEY",
       hermesVersionOutput: [
         "Hermes Agent v0.18.2 (test) · upstream abcdef0",
+        "Install directory: C:\\hermes-agent",
         "Python: 3.11.15",
         "OpenAI SDK: 2.24.0",
+        "MCP SDK: 1.26.0",
+        "Starlette: 1.3.1",
+        "aiohttp: 3.14.1",
       ].join("\n"),
       createdWall: "2026-07-24T12:00:00.000Z",
     });

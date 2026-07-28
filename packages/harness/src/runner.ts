@@ -147,6 +147,9 @@ function validateRuntimePins(
     hermesVersion: hermes.version,
     hermesPythonVersion: hermes.pythonVersion,
     hermesOpenAiSdkVersion: hermes.openAiSdkVersion,
+    hermesMcpSdkVersion: hermes.mcpSdkVersion,
+    hermesStarletteVersion: hermes.starletteVersion,
+    hermesAiohttpVersion: hermes.aiohttpVersion,
   } as const;
   for (const key of Object.keys(hermesPins) as Array<keyof typeof hermesPins>) {
     const current = hermesPins[key];
