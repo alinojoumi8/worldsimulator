@@ -5,6 +5,7 @@ import {
 } from "@worldtangle/shared";
 import {
   agentLabDriverPolicyDigest,
+  agentLabPilotOpportunityFixture,
   agentLabPromptDigest,
   agentLabToolPins,
   CITIZEN_TURN_PROMPT,
@@ -31,6 +32,7 @@ const manifest = validateExperimentManifest({
       perAgentDailyTokens: 10_000,
     },
     policyOverrides: {},
+    opportunityFixture: agentLabPilotOpportunityFixture(),
   },
   cohort: {
     strategy: "stable_stratified_v1",

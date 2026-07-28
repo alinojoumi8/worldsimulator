@@ -11,6 +11,7 @@ import {
 import {
   CITIZEN_TURN_PROMPT,
   agentLabDriverPolicyDigest,
+  agentLabPilotOpportunityFixture,
   agentLabPromptDigest,
   agentLabToolPins,
 } from "./driver-policy";
@@ -66,6 +67,7 @@ export function createPilotManifest(input: Readonly<{
         perAgentDailyTokens: 10_000,
       },
       policyOverrides: {},
+      opportunityFixture: agentLabPilotOpportunityFixture(),
     },
     cohort: {
       strategy: "stable_stratified_v1",

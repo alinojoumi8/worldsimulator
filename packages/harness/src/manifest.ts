@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   AGENT_LAB_MCP_TOOL_DEFINITIONS,
   canonicalStringify,
+  compareCodeUnit,
   experimentManifestSchema,
   sha256Hex,
   type AgentLabMode,
@@ -10,6 +11,7 @@ import {
 } from "@worldtangle/shared";
 import {
   agentLabDriverPolicyDigest,
+  agentLabLegacyDriverPolicyDigest,
   agentLabPromptDigest,
   agentLabToolSchemaDigest,
 } from "./driver-policy";
@@ -21,10 +23,6 @@ export interface TrialPlan {
   readonly mode: AgentLabMode;
   readonly seed: number;
   readonly attempt: number;
-}
-
-function compareCodeUnit(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 const FORBIDDEN_MANIFEST_KEYS = new Set([
@@ -73,7 +71,10 @@ export function experimentManifestDigest(manifest: ExperimentManifest): string {
   return sha256Hex(canonicalStringify(manifest));
 }
 
-export function validateExperimentManifest(input: unknown): ExperimentManifest {
+function validateExperimentManifestWithPolicy(
+  input: unknown,
+  allowLegacyDriverPolicy: boolean,
+): ExperimentManifest {
   assertNoCredentialMaterial(input);
   const manifest = experimentManifestSchema.parse(input);
   if (manifest.provider.family !== "hermes") {
@@ -131,8 +132,23 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
   if (agentLabPromptDigest(manifest.prompt.bytes) !== manifest.prompt.digest) {
     throw new Error("experiment prompt bytes do not match their pinned digest");
   }
-  if (agentLabDriverPolicyDigest(manifest.generationBudget) !== manifest.driverPolicyDigest) {
-    throw new Error("experiment driver policy does not match its pinned digest");
+  const currentDriverPolicyDigest = agentLabDriverPolicyDigest(
+    manifest.generationBudget,
+  );
+  if (manifest.driverPolicyDigest !== currentDriverPolicyDigest) {
+    const legacyDriverPolicyDigest = agentLabLegacyDriverPolicyDigest(
+      manifest.generationBudget,
+    );
+    if (
+      !allowLegacyDriverPolicy ||
+      manifest.driverPolicyDigest !== legacyDriverPolicyDigest
+    ) {
+      throw new Error(
+        allowLegacyDriverPolicy
+          ? "experiment driver policy does not match a supported archive digest"
+          : "experiment driver policy must match the current stable_driver_v2 digest",
+      );
+    }
   }
   const definitions = new Map(
     AGENT_LAB_MCP_TOOL_DEFINITIONS.map((tool) => [tool.name, tool.inputSchema]),
@@ -155,7 +171,20 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
   return manifest;
 }
 
-export function loadExperimentManifest(path: string): ExperimentManifest {
+export function validateExperimentManifest(input: unknown): ExperimentManifest {
+  return validateExperimentManifestWithPolicy(input, false);
+}
+
+export function validateArchivedExperimentManifest(
+  input: unknown,
+): ExperimentManifest {
+  return validateExperimentManifestWithPolicy(input, true);
+}
+
+export function loadExperimentManifest(
+  path: string,
+  options: Readonly<{ allowArchivedDriverPolicy?: boolean }> = {},
+): ExperimentManifest {
   const absolute = resolve(path);
   let parsed: unknown;
   try {
@@ -166,7 +195,9 @@ export function loadExperimentManifest(path: string): ExperimentManifest {
         (error instanceof Error ? error.message : String(error)),
     );
   }
-  return validateExperimentManifest(parsed);
+  return options.allowArchivedDriverPolicy === true
+    ? validateArchivedExperimentManifest(parsed)
+    : validateExperimentManifest(parsed);
 }
 
 export function planTrials(manifest: ExperimentManifest): readonly TrialPlan[] {

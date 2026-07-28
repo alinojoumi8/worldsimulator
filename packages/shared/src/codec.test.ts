@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalParse,
   canonicalStringify,
+  compareCodeUnit,
   CodecError,
   fnv1a32,
   hashValue,
@@ -9,10 +10,36 @@ import {
   sha256Hex,
 } from "./codec";
 
+describe("compareCodeUnit", () => {
+  it("uses exact UTF-16 code-unit order for canonical collections", () => {
+    expect(compareCodeUnit("same", "same")).toBe(0);
+    expect(compareCodeUnit("A", "a")).toBeLessThan(0);
+    expect(compareCodeUnit("a", "A")).toBeGreaterThan(0);
+    expect(compareCodeUnit("\uD800", "\uDC00")).toBeLessThan(0);
+    expect(compareCodeUnit("\uDC00", "\uD800")).toBeGreaterThan(0);
+    expect(compareCodeUnit("\uD800\uDC00", "\uE000")).toBeLessThan(0);
+    expect(compareCodeUnit("\uE000", "\uD800\uDC00")).toBeGreaterThan(0);
+    expect(["\uDC00", "\uD800", "a"].sort(compareCodeUnit)).toEqual([
+      "a",
+      "\uD800",
+      "\uDC00",
+    ]);
+  });
+});
+
 describe("canonicalStringify", () => {
   it("is invariant to object key order", () => {
     expect(canonicalStringify({ a: 1, b: 2 })).toBe(canonicalStringify({ b: 2, a: 1 }));
     expect(canonicalStringify({ a: 1, b: 2 })).toBe('{"a":1,"b":2}');
+  });
+
+  it("applies code-unit ordering at the object serialization boundary", () => {
+    expect(canonicalStringify({
+      "2": 2,
+      "10": 10,
+      a: 4,
+      A: 3,
+    })).toBe('{"10":10,"2":2,"A":3,"a":4}');
   });
 
   it("sorts nested objects too", () => {

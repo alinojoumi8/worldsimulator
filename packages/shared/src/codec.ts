@@ -33,6 +33,11 @@ export function canonicalStringify(value: unknown): string {
   return stringifyInner(value, new Set<object>());
 }
 
+/** Deterministic UTF-16 code-unit ordering for canonical collections. */
+export function compareCodeUnit(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function stringifyInner(value: unknown, seen: Set<object>): string {
   switch (typeof value) {
     case "string":
@@ -67,7 +72,8 @@ function stringifyInner(value: unknown, seen: Set<object>): string {
           throw new CodecError("only plain objects are serializable (no Map/Set/Date/class instances)");
         }
         const record = value as Record<string, unknown>;
-        const keys = Object.keys(record).sort(); // code-unit sort: deterministic, no ICU
+        // Code-unit sort: deterministic, no ICU (ADR-0008).
+        const keys = Object.keys(record).sort(compareCodeUnit);
         const parts: string[] = [];
         for (const key of keys) {
           const item = record[key];

@@ -1,7 +1,12 @@
 import { z } from "zod";
-import { canonicalStringify, hashValue } from "./codec";
+import { canonicalStringify, compareCodeUnit, hashValue } from "./codec";
 
 export const AGENT_LAB_PROTOCOL_VERSION = "wt.agent-lab.v1" as const;
+export const AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION =
+  "goal_commitment_choice_v1" as const;
+export const AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX =
+  "06-agent-lab-goal-commitment:" as const;
+export const AGENT_LAB_PILOT_FIXTURE_TICKS = Object.freeze([10, 30, 50] as const);
 export const AGENT_LAB_MODES = ["native", "shadow", "external"] as const;
 export const AGENT_LAB_CONTROLLERS = ["native", "shadow", "external"] as const;
 export const AGENT_LAB_SCOPES = [
@@ -18,6 +23,13 @@ export const AGENT_LAB_RECEIPT_STATUSES = [
   "stale",
   "fallback",
 ] as const;
+export const AGENT_LAB_TERMINAL_RECEIPT_STATUSES = Object.freeze([
+  "shadowed",
+  "applied",
+  "rejected",
+  "stale",
+  "fallback",
+] as const);
 export const AGENT_LAB_MCP_TOOL_NAMES = [
   "wt_identity_get",
   "wt_turn_wait",
@@ -181,18 +193,94 @@ export type AgentLabMode = z.infer<typeof agentLabModeSchema>;
 export type AgentLabController = z.infer<typeof agentLabControllerSchema>;
 export type AgentLabScope = z.infer<typeof agentLabScopeSchema>;
 export type AgentLabReceiptStatus = z.infer<typeof agentLabReceiptStatusSchema>;
+export type AgentLabTerminalReceiptStatus =
+  (typeof AGENT_LAB_TERMINAL_RECEIPT_STATUSES)[number];
+type AgentLabNonTerminalReceiptStatus = "queued";
+
+function assertReceiptStatusClassificationIsExhaustive<
+  Unclassified extends never,
+>(...unclassified: Unclassified[]): void {
+  void unclassified;
+}
+
+assertReceiptStatusClassificationIsExhaustive<
+  Exclude<
+    AgentLabReceiptStatus,
+    AgentLabTerminalReceiptStatus | AgentLabNonTerminalReceiptStatus
+  >
+>();
+
+const terminalReceiptStatusSet: ReadonlySet<string> = new Set(
+  AGENT_LAB_TERMINAL_RECEIPT_STATUSES,
+);
+
+export function isAgentLabTerminalReceiptStatus(
+  value: AgentLabReceiptStatus | null | undefined,
+): value is AgentLabTerminalReceiptStatus {
+  return value !== null &&
+    value !== undefined &&
+    terminalReceiptStatusSet.has(value);
+}
 
 export const agentLabControllerAssignmentSchema = z.object({
   agentId: agentIdSchema,
   controller: agentLabControllerSchema,
 }).strict();
 
+export const AGENT_LAB_COHORT_STRATA = Object.freeze([
+  "occupation",
+  "employment_status",
+  "household",
+] as const);
+export type AgentLabCohortStratum = (typeof AGENT_LAB_COHORT_STRATA)[number];
+export const agentLabCohortStratumSchema = z.enum(AGENT_LAB_COHORT_STRATA);
+
 export const agentLabCohortSelectionSchema = z.object({
   strategy: z.literal("stable_stratified_v1"),
   size: z.number().int().min(1).max(100).safe(),
-  controller: z.enum(["shadow", "external"]),
-  strata: z.array(z.enum(["occupation", "employment_status", "household"])).min(1).max(3),
-}).strict();
+  controller: agentLabControllerSchema,
+  strata: z.array(agentLabCohortStratumSchema).min(1).max(3),
+}).strict().superRefine((value, ctx) => {
+  if (new Set(value.strata).size !== value.strata.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["strata"],
+      message: "cohort strata must be unique",
+    });
+  }
+});
+
+export const agentLabOpportunityFixtureSchema = z.object({
+  version: z.literal(AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION),
+  ticks: z.array(z.number().int().positive().safe()).min(1).max(100),
+}).strict().superRefine((value, ctx) => {
+  if (value.ticks.some((tick, index) => index > 0 && tick <= value.ticks[index - 1]!)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ticks"],
+      message: "opportunity fixture ticks must be unique and strictly ascending",
+    });
+  }
+});
+export type AgentLabOpportunityFixture = z.infer<typeof agentLabOpportunityFixtureSchema>;
+
+/**
+ * Fixture ticks must already be positive through schema validation. This
+ * helper checks only that those validated ticks do not exceed the run bound.
+ */
+export function agentLabFixtureTicksWithinBound(
+  fixture: AgentLabOpportunityFixture | undefined,
+  bound: number,
+): boolean {
+  return fixture === undefined || fixture.ticks.every((tick) => tick <= bound);
+}
+
+export function agentLabFixtureScheduleKey(
+  targetTick: number,
+  agentId: string,
+): string {
+  return `${targetTick}\u0000${agentId}`;
+}
 
 export const agentLabBudgetSchema = z.object({
   maxAgentLoopIterations: z.number().int().min(1).max(8).safe(),
@@ -210,12 +298,17 @@ export const agentLabScenarioSchema = z.object({
   mode: agentLabModeSchema,
   controllerAssignments: z.array(agentLabControllerAssignmentSchema).max(100).optional(),
   cohortSelection: agentLabCohortSelectionSchema.optional(),
+  opportunityFixture: agentLabOpportunityFixtureSchema.optional(),
   decisionDeadlineMs: z.number().int().min(50).max(120_000).safe(),
   budget: agentLabBudgetSchema,
   driverPolicyDigest: sha256DigestSchema,
   promptDigest: sha256DigestSchema,
   toolSchemaDigest: sha256DigestSchema,
 }).strict().superRefine((value, ctx) => {
+  const hasExplicitAssignments = (
+    value.controllerAssignments !== undefined &&
+    value.controllerAssignments.length > 0
+  );
   if (value.controllerAssignments !== undefined && value.cohortSelection !== undefined) {
     ctx.addIssue({
       code: "custom",
@@ -225,13 +318,24 @@ export const agentLabScenarioSchema = z.object({
   }
   if (
     value.mode !== "native" &&
-    value.controllerAssignments === undefined &&
+    !hasExplicitAssignments &&
     value.cohortSelection === undefined
   ) {
     ctx.addIssue({
       code: "custom",
       path: ["controllerAssignments"],
       message: "shadow and external trials require an explicit or stratified cohort",
+    });
+  }
+  if (
+    value.opportunityFixture !== undefined &&
+    !hasExplicitAssignments &&
+    value.cohortSelection === undefined
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["opportunityFixture"],
+      message: "an opportunity fixture requires an explicit or stratified cohort",
     });
   }
   if (
@@ -461,6 +565,7 @@ export const experimentManifestSchema = z.object({
       perAgentDailyTokens: z.number().int().positive().safe(),
     }).strict(),
     policyOverrides: z.record(z.string(), z.number().int().safe()),
+    opportunityFixture: agentLabOpportunityFixtureSchema.optional(),
   }).strict(),
   cohort: agentLabCohortSelectionSchema,
   interventions: z.array(z.object({
@@ -529,6 +634,16 @@ export const experimentManifestSchema = z.object({
       message: "experiment seeds must be unique",
     });
   }
+  if (!agentLabFixtureTicksWithinBound(
+    value.scenario.opportunityFixture,
+    value.scenario.ticks,
+  )) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["scenario", "opportunityFixture", "ticks"],
+      message: "every opportunity fixture tick must occur inside the trial tick range",
+    });
+  }
   const interventionIds = value.interventions.map((intervention) => intervention.id);
   if (new Set(interventionIds).size !== interventionIds.length) {
     ctx.addIssue({
@@ -576,15 +691,69 @@ export const experimentManifestSchema = z.object({
 });
 export type ExperimentManifest = z.infer<typeof experimentManifestSchema>;
 
+export const AGENT_LAB_TAINT_REASON_LIMIT = 100;
+
 export const taintRecordSchema = z.object({
   tainted: z.boolean(),
   reasons: z.array(z.object({
     code: z.enum(["manual_input", "manifest_drift", "unmanifested_intervention", "artifact_corrupt"]),
     detail: z.string().min(1).max(1_000),
     recordedWall: z.string().datetime({ offset: true }),
-  }).strict()).max(100),
+  }).strict()).max(AGENT_LAB_TAINT_REASON_LIMIT),
 }).strict();
 export type TaintRecord = z.infer<typeof taintRecordSchema>;
+
+function checkFixtureSequence(
+  entries: readonly {
+    readonly agentId: string;
+    readonly targetTick: number;
+  }[],
+  cohortAgentIds: readonly string[],
+  ctx: z.RefinementCtx,
+  path: string,
+  messages: Readonly<{
+    duplicate: string;
+    ordering: string;
+    cohort: string;
+  }>,
+): void {
+  const keys = entries.map((entry) =>
+    agentLabFixtureScheduleKey(entry.targetTick, entry.agentId)
+  );
+  if (new Set(keys).size !== keys.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: [path],
+      message: messages.duplicate,
+    });
+  }
+  if (entries.some((entry, index) => {
+    if (index === 0) return false;
+    const previous = entries[index - 1]!;
+    return entry.targetTick < previous.targetTick ||
+      (
+        entry.targetTick === previous.targetTick &&
+        compareCodeUnit(entry.agentId, previous.agentId) < 0
+      );
+  })) {
+    ctx.addIssue({
+      code: "custom",
+      path: [path],
+      message: messages.ordering,
+    });
+  }
+  const cohort = new Set(cohortAgentIds);
+  if (
+    entries.length > 0 &&
+    entries.some((entry) => !cohort.has(entry.agentId))
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: [path],
+      message: messages.cohort,
+    });
+  }
+}
 
 export const trialArtifactSchema = z.object({
   schemaVersion: z.literal(1),
@@ -612,6 +781,35 @@ export const trialArtifactSchema = z.object({
   statistics: z.object({
     turns: z.number().int().nonnegative().safe(),
     terminalReceipts: z.number().int().nonnegative().safe(),
+    fixtureTurns: z.number().int().nonnegative().safe().default(0),
+    fixtureTerminalReceipts: z.number().int().nonnegative().safe().default(0),
+    cohortAgentIds: z.array(agentIdSchema).max(100).default([]),
+    fixtureSchedule: z.array(z.object({
+      agentId: agentIdSchema,
+      targetTick: z.number().int().positive().safe(),
+      turnId: z.string().regex(TURN_ID_PATTERN),
+      receiptStatus: agentLabReceiptStatusSchema.nullable(),
+    }).strict()).max(10_000).default([]),
+    authoritativeFixtureSchedule: z.array(z.object({
+      agentId: agentIdSchema,
+      targetTick: z.number().int().positive().safe(),
+      eventId: z.string().regex(/^evt_[0-9a-z]{8,64}$/),
+      actionType: z.enum(["agent.reaffirm_goal", "agent.defer_goal"]),
+      opportunityKey: z.string().max(240).startsWith(
+        AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX,
+      ),
+    }).strict()).max(10_000).default([]),
+    fixtureHermesEvidenceSchedule: z.array(z.object({
+      agentId: agentIdSchema,
+      targetTick: z.number().int().positive().safe(),
+      turnId: z.string().regex(TURN_ID_PATTERN),
+      hermesRunId: z.string().min(1).max(240),
+      status: z.enum(["completed", "failed", "cancelled"]),
+      inputTokens: z.number().int().nonnegative().safe(),
+      outputTokens: z.number().int().nonnegative().safe(),
+      toolCalls: z.number().int().nonnegative().safe(),
+      budgetViolationCount: z.number().int().nonnegative().safe(),
+    }).strict()).max(10_000).default([]),
     validSubmissions: z.number().int().nonnegative().safe(),
     rejectedSubmissions: z.number().int().nonnegative().safe(),
     fallbacks: z.number().int().nonnegative().safe(),
@@ -620,9 +818,201 @@ export const trialArtifactSchema = z.object({
     outputTokens: z.number().int().nonnegative().safe(),
     costMicrocents: z.string().regex(/^\d+$/),
     latencyMs: z.number().int().nonnegative().safe(),
-  }).strict(),
+  }).strict().superRefine((value, ctx) => {
+    if (new Set(value.cohortAgentIds).size !== value.cohortAgentIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["cohortAgentIds"],
+        message: "cohort agent IDs must be unique",
+      });
+    }
+    if (value.cohortAgentIds.some(
+      (agentId, index) => (
+        index > 0 &&
+        compareCodeUnit(agentId, value.cohortAgentIds[index - 1]!) < 0
+      ),
+    )) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["cohortAgentIds"],
+        message: "cohort agent IDs must be canonically ordered",
+      });
+    }
+    checkFixtureSequence(
+      value.fixtureSchedule,
+      value.cohortAgentIds,
+      ctx,
+      "fixtureSchedule",
+      {
+        duplicate: "fixture schedule entries must be unique per agent and target tick",
+        ordering: "fixture schedule must be canonically ordered by target tick then agent",
+        cohort: "every fixture schedule agent must belong to the recorded cohort",
+      },
+    );
+    const scheduleTurnIds = value.fixtureSchedule.map((entry) => entry.turnId);
+    if (new Set(scheduleTurnIds).size !== scheduleTurnIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureSchedule"],
+        message: "fixture schedule turn IDs must be unique",
+      });
+    }
+    if (value.fixtureSchedule.length !== value.fixtureTurns) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureSchedule"],
+        message: "fixture schedule length must equal fixture turn count",
+      });
+    }
+    const scheduledTerminalReceipts = value.fixtureSchedule.filter(
+      (entry) => isAgentLabTerminalReceiptStatus(entry.receiptStatus),
+    ).length;
+    if (scheduledTerminalReceipts !== value.fixtureTerminalReceipts) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureSchedule"],
+        message: "fixture schedule terminal statuses must equal the terminal receipt count",
+      });
+    }
+    if (value.fixtureTurns > value.turns) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureTurns"],
+        message: "fixture turns cannot exceed total turns",
+      });
+    }
+    if (value.fixtureTerminalReceipts > value.terminalReceipts) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureTerminalReceipts"],
+        message: "fixture terminal receipts cannot exceed total terminal receipts",
+      });
+    }
+    if (value.fixtureTerminalReceipts > value.fixtureTurns) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureTerminalReceipts"],
+        message: "fixture terminal receipts cannot exceed fixture turns",
+      });
+    }
+    checkFixtureSequence(
+      value.authoritativeFixtureSchedule,
+      value.cohortAgentIds,
+      ctx,
+      "authoritativeFixtureSchedule",
+      {
+        duplicate:
+          "authoritative fixture entries must be unique per agent and target tick",
+        ordering:
+          "authoritative fixture schedule must be ordered by target tick then agent",
+        cohort:
+          "every authoritative fixture agent must belong to the recorded cohort",
+      },
+    );
+    const authoritativeEventIds = value.authoritativeFixtureSchedule.map(
+      (entry) => entry.eventId,
+    );
+    if (new Set(authoritativeEventIds).size !== authoritativeEventIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["authoritativeFixtureSchedule"],
+        message: "authoritative fixture event IDs must be unique",
+      });
+    }
+    checkFixtureSequence(
+      value.fixtureHermesEvidenceSchedule,
+      value.cohortAgentIds,
+      ctx,
+      "fixtureHermesEvidenceSchedule",
+      {
+        duplicate:
+          "fixture Hermes evidence must be unique per agent and target tick",
+        ordering:
+          "fixture Hermes evidence must be ordered by target tick then agent",
+        cohort:
+          "every fixture Hermes evidence agent must belong to the cohort",
+      },
+    );
+    const hermesEvidenceTurnIds = value.fixtureHermesEvidenceSchedule.map(
+      (entry) => entry.turnId,
+    );
+    if (new Set(hermesEvidenceTurnIds).size !== hermesEvidenceTurnIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureHermesEvidenceSchedule"],
+        message: "fixture Hermes evidence turn IDs must be unique",
+      });
+    }
+    const hermesRunIds = value.fixtureHermesEvidenceSchedule.map(
+      (entry) => entry.hermesRunId,
+    );
+    if (new Set(hermesRunIds).size !== hermesRunIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["fixtureHermesEvidenceSchedule"],
+        message: "fixture Hermes run IDs must be unique",
+      });
+    }
+    if (value.fixtureHermesEvidenceSchedule.length > 0) {
+      const fixtureKeyByTurnId = new Map(
+        value.fixtureSchedule.map((entry) => [
+          entry.turnId,
+          agentLabFixtureScheduleKey(entry.targetTick, entry.agentId),
+        ]),
+      );
+      if (value.fixtureHermesEvidenceSchedule.some(
+        (entry) =>
+          fixtureKeyByTurnId.get(entry.turnId) !==
+            agentLabFixtureScheduleKey(entry.targetTick, entry.agentId),
+      )) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["fixtureHermesEvidenceSchedule"],
+          message:
+            "every fixture Hermes evidence row must reference a fixture turn",
+        });
+      }
+    }
+  }),
   taint: taintRecordSchema,
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  // Native runs record authoritative fixture actions without Hermes turns, so
+  // fixtureSchedule is empty and the fixture-slot join does not apply.
+  if (value.mode === "native") {
+    if (value.statistics.fixtureSchedule.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["statistics", "fixtureSchedule"],
+        message: "native trials must not record fixture turns",
+      });
+    }
+    if (value.statistics.fixtureHermesEvidenceSchedule.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["statistics", "fixtureHermesEvidenceSchedule"],
+        message: "native trials must not record fixture Hermes evidence",
+      });
+    }
+    return;
+  }
+  const fixtureKeys = new Set(
+    value.statistics.fixtureSchedule.map((entry) =>
+      agentLabFixtureScheduleKey(entry.targetTick, entry.agentId)
+    ),
+  );
+  if (value.statistics.authoritativeFixtureSchedule.some(
+    (entry) => !fixtureKeys.has(
+      agentLabFixtureScheduleKey(entry.targetTick, entry.agentId),
+    ),
+  )) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["statistics", "authoritativeFixtureSchedule"],
+      message:
+        "every authoritative fixture entry must reference a fixture turn slot",
+    });
+  }
+});
 export type TrialArtifact = z.infer<typeof trialArtifactSchema>;
 
 const scoreMetricSchema = z.object({

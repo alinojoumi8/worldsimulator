@@ -122,6 +122,7 @@ function parseAction(row: ActionRow) {
 function actionIdentityField(type: string): string | undefined {
   switch (type) {
     case "agent.advance_goal":
+    case "agent.reaffirm_goal":
     case "agent.activate_goal":
     case "agent.defer_goal":
     case "agent.respond_job_offer":
