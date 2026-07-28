@@ -29,7 +29,7 @@ import {
   type RunManifestAgentLab,
 } from "@worldtangle/shared";
 import { verifyTrialArtifact } from "./artifact";
-import { parseArguments } from "./cli";
+import { formatCliError, parseArguments } from "./cli";
 import { createPilotManifest } from "./create-manifest";
 import {
   agentLabDriverPolicy,
@@ -896,6 +896,27 @@ describe("Agent Lab harness", () => {
 
     expect(calls).toEqual(["fleet", "app", "runtime"]);
     expect(errors).toEqual([firstFailure, secondFailure]);
+  });
+
+  it("reports bounded nested cleanup failures without duplicate headlines", () => {
+    const error = new AggregateError(
+      [
+        new Error("profile cleanup failed"),
+        new Error("profile cleanup failed"),
+        new AggregateError(
+          [new Error("runtime cleanup failed")],
+          "nested cleanup failed",
+        ),
+      ],
+      "Agent Lab trial failed and cleanup was incomplete",
+    );
+
+    expect(formatCliError(error)).toBe([
+      "Agent Lab trial failed and cleanup was incomplete",
+      "caused by: profile cleanup failed",
+      "caused by: nested cleanup failed",
+      "caused by: runtime cleanup failed",
+    ].join("\n"));
   });
 
   it("does not replace redaction markers with short secret fragments", () => {

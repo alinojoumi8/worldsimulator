@@ -703,7 +703,7 @@ async function runTrial(
 
     // Prove replay is independent of Hermes by stopping every profile before
     // requesting the strict source-run replay.
-    await fleet.stop();
+    await fleet.stopProcesses();
     const replayAccepted = replaySimulationResponseSchema.parse(requireStatus(
       await jsonRequest(
         baseUrl,
@@ -736,18 +736,18 @@ async function runTrial(
     throw error;
   } finally {
     const cleanupErrors = await collectTrialCleanupErrors([
-      () => fleet.stop(),
+      () => fleet.stopProcesses(),
       () => app.close(),
-      ...(!options.keepRuntime
-        ? [(): void => {
+      ...(options.keepRuntime
+        ? [() => fleet.removeProfiles()]
+        : [(): void => {
             rmSync(runtimeRoot, {
               recursive: true,
               force: true,
               maxRetries: 50,
               retryDelay: 100,
             });
-          }]
-        : []),
+          }]),
     ]);
     if (cleanupErrors.length > 0) {
       throw new AggregateError(

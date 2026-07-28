@@ -398,7 +398,7 @@ export class HermesProfileFleet {
     return endpoints;
   }
 
-  async stop(): Promise<void> {
+  async stopProcesses(): Promise<void> {
     const terminationErrors = (
       await Promise.all(
         this.processes.splice(0).map(async (child): Promise<unknown | null> => {
@@ -417,6 +417,9 @@ export class HermesProfileFleet {
         "one or more Hermes processes could not be terminated",
       );
     }
+  }
+
+  async removeProfiles(): Promise<void> {
     const profileRemovalErrors: unknown[] = [];
     const retainedProfileRoots: string[] = [];
     for (const root of this.profileRoots.splice(0)) {
@@ -439,6 +442,11 @@ export class HermesProfileFleet {
         "one or more Hermes profile roots could not be removed",
       );
     }
+  }
+
+  async stop(): Promise<void> {
+    await this.stopProcesses();
+    await this.removeProfiles();
   }
 }
 
