@@ -28,4 +28,22 @@ Use Vitest's `describe`/`it` style and name tests `*.test.ts` or `*.test.tsx`. A
 
 ## Commit & Pull Request Guidelines
 
-The repository has no established Git history yet. Use short, imperative commit subjects, optionally scoped, for example `engine: preserve event ordering`. Keep commits focused. Pull requests should explain intent and design impact, link relevant issues or ADRs, identify configuration/API changes, and include screenshots when user-facing output changes. Report the commands run and ensure CI passes on both Windows and Ubuntu.
+Follow `docs/GIT_WORKFLOW.md`. Use focused conventional commits such as
+`feat(engine): preserve event ordering`, keep the first line under 72
+characters, and never stage unrelated work. Pull requests should explain intent
+and design impact, link relevant issues or ADRs, identify configuration or API
+changes, include screenshots when user-facing output changes, and report exact
+commands and results.
+
+CodeRabbit review is required for every pull request and repository review
+request. For local reviews, run the authenticated CodeRabbit CLI against the
+intended base branch when it is available. For pull requests, wait for
+CodeRabbit to review the latest head commit. Close every actionable finding
+only after a validated fix or a recorded owner-approved disposition, rerun
+affected tests, and request another review after changes. Use a full review
+after material cross-cutting changes. If CodeRabbit is unavailable,
+unauthenticated, or times out, report that the CodeRabbit gate did not complete;
+do not substitute a manual review and describe it as CodeRabbit. Never use the
+ignore command or CodeRabbit Autofix without explicit repository-owner
+approval. CodeRabbit does not replace required tests, CI, or explicit approval
+to merge.

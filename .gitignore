@@ -5,6 +5,7 @@ playwright-report/
 test-results/
 data/
 .runtime/
+.claude/settings.local.json
 .env
 *.tsbuildinfo
 .DS_Store

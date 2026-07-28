@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+tone_instructions: "Be concise and evidence-based. Prioritize correctness, security, determinism, replay safety, and user-visible regressions over style-only feedback."
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: true
+  commit_status: true
+  fail_commit_status: true
+  review_progress: false
+  poem: false
+
+  path_filters:
+    - "!.codebase-memory/**"
+    - "!apps/web/dist/**"
+    - "!**/coverage/**"
+    - "!playwright-report/**"
+    - "!test-results/**"
+
+  path_instructions:
+    - path: "packages/shared/src/**"
+      instructions: |
+        Treat shared schemas and codecs as public contracts. Check strict parsing,
+        backwards compatibility, canonical serialization, bigint handling, and
+        whether contract changes have matching tests and documentation.
+    - path: "packages/engine/src/**"
+      instructions: |
+        Enforce deterministic execution and canonical opportunity/event ordering.
+        Flag Date.now(), Math.random(), argless new Date(), localeCompare(),
+        unjournaled external input, unstable iteration, and changes that can break
+        replay or accounting invariants.
+    - path: "apps/server/src/**"
+      instructions: |
+        Check authentication and authorization boundaries, strict request and
+        response schemas, idempotency, transaction rollback, cross-run isolation,
+        secret handling, replay behavior, and useful failure logging.
+    - path: "apps/web/src/**"
+      instructions: |
+        Check contract-backed loading, empty, error, retry, and reconnect states;
+        keyboard and screen-reader accessibility; simulated-evidence labeling;
+        causal deep links; and regressions in the guided first-session path.
+    - path: "packages/harness/**"
+      instructions: |
+        Check isolated trial state, manifest and byte pinning, taint detection,
+        artifact completeness, credential exclusion, offline replay, bounded
+        provider use, and deterministic scorecard calculations.
+    - path: "**/*.test.*"
+      instructions: |
+        Verify that tests assert behavior rather than implementation details and
+        cover failure, stale-input, privacy, rollback, reconnect, and determinism
+        cases whenever those risks are in scope.
+    - path: ".github/**"
+      instructions: |
+        Check least-privilege permissions, pinned action versions, deterministic
+        gates, safe secret usage, and whether documented required checks match the
+        actual workflow job names.
+    - path: "docs/**"
+      instructions: |
+        Check that claims match implemented behavior, limitations and manual gates
+        are explicit, commands are current, and simulated results are not presented
+        as real-world predictions.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    drafts: true
+    base_branches:
+      - ".*"
+
+  pre_merge_checks:
+    # This is currently a single-collaborator repository. Restricting overrides
+    # to non-author requested reviewers would make a false-positive check
+    # impossible to disposition.
+    override_requested_reviewers_only: false
+    title:
+      mode: "error"
+      requirements: "Use type(scope): concise outcome in plain English, with the first line under 72 characters."
+    description:
+      mode: "error"
+    custom_checks:
+      - name: "Release evidence"
+        mode: "error"
+        instructions: |
+          Pass only when the PR description records exact commands and results for
+          applicable checks, identifies every skipped or manual gate with a reason,
+          and describes setup, migration, documentation, risks, and limitations.
+          Do not accept an unsupported claim that tests passed.
+      - name: "Determinism and replay safety"
+        mode: "error"
+        instructions: |
+          If the PR changes shared contracts, engine behavior, persistence, replay,
+          scheduling, or external-agent input, pass only when deterministic ordering,
+          canonical encoding, journaled causal inputs, accounting invariants, and
+          offline replay are preserved and covered by proportionate tests. Pass when
+          none of those concerns are in scope.
+
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+
+chat:
+  art: false
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "docs/GIT_WORKFLOW.md"

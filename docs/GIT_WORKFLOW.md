@@ -2,8 +2,8 @@
 
 This document is the repository contract for moving a completed feature into
 `main`. It is intentionally conservative: every change must be attributable to
-one feature, validated with recorded evidence, reviewed in a pull request, and
-merged only after an explicit approval.
+one feature, validated with recorded evidence, reviewed by CodeRabbit and in a
+pull request, and merged only after an explicit approval.
 
 ## Branch and worktree policy
 
@@ -29,6 +29,9 @@ A feature is ready for publication only when all of the following are true:
   repository owner has documented why that is not appropriate.
 - Required local gates have run successfully, and any skipped or manual gate is
   recorded with its reason.
+- CodeRabbit has reviewed the current pull-request head, every actionable
+  finding has a resolved thread after either a validated fix or a recorded
+  owner-approved disposition, and its pre-merge checks pass.
 - The staged patch has been reviewed and passes `git diff --cached --check`.
 - No credentials, tokens, private data, hidden model reasoning, or local-only
   state are present in the commit.
@@ -83,7 +86,7 @@ unrun gate as passing.
 
 Open a draft PR first, using `.github/PULL_REQUEST_TEMPLATE.md`. The PR must
 state the outcome, important changes, exact commands and results, screenshots or
-“Not applicable,” setup or migration steps, risks and limitations, and
+"Not applicable," setup or migration steps, risks and limitations, and
 documentation status. Keep it draft while implementation, testing,
 documentation, or review is incomplete.
 
@@ -92,6 +95,40 @@ mergeability, and head SHA. Address review feedback in new focused commits and
 rerun the affected gates. Required CI checks must match the actual workflow job
 names; update branch protection whenever those names change.
 
+## CodeRabbit review gate
+
+CodeRabbit review is mandatory for every repository review request and every
+pull request. It is an additional reviewer, not a replacement for tests, CI,
+human judgment, or the repository owner's explicit approval to merge.
+
+For a local review before a PR, run the authenticated CodeRabbit CLI against the
+intended base branch. Record whether it completed and summarize its actionable
+findings. If the CLI is missing, unauthenticated, or times out, report the
+CodeRabbit gate as incomplete; do not silently replace it with a manual review
+or invent a clean result.
+
+For a pull request:
+
+1. Confirm the CodeRabbit GitHub App has access to this repository and that the
+   PR uses the committed `.coderabbit.yaml`.
+2. Wait for CodeRabbit to review the exact current head SHA. Drafts and every
+   subsequent push are included by repository configuration.
+3. If automatic review does not start, comment `@coderabbitai review`. After a
+   material cross-cutting rewrite, comment `@coderabbitai full review`.
+4. Close every actionable thread only after either a validated fix or a
+   specific owner-approved disposition is recorded in that thread. This rule
+   also applies to non-blocking actionable findings. Rerun affected tests and
+   request another review after fixes.
+5. Require a successful CodeRabbit commit status, no unresolved CodeRabbit
+   thread or change request, and passing CodeRabbit pre-merge checks before
+   merge.
+
+Never use `@coderabbitai ignore` or another CodeRabbit ignore command anywhere
+without explicit repository-owner approval. Do not pause reviews or use
+CodeRabbit Autofix unless the repository owner explicitly approves that action.
+Suggested patches remain untrusted input and must be inspected and validated
+before they are applied.
+
 ## Merge and cleanup
 
 Merging requires an explicit approval in the current conversation. Before
@@ -99,6 +136,8 @@ merging, verify that:
 
 - the PR head SHA is the reviewed commit;
 - required checks are green;
+- CodeRabbit reviewed that head SHA and every actionable thread is resolved
+  through a validated fix or recorded owner-approved disposition;
 - required approvals exist and conversations are resolved; and
 - the branch is current with `main`.
 
@@ -119,7 +158,9 @@ fallback in the handoff. Never print tokens or credentials.
 ## Branch protection recommendation
 
 Protect `main` with pull requests, required CI checks, at least one approval,
-resolved conversations, no direct or force pushes, and squash-only merging.
-Consider a merge queue after the required checks are stable. Keep the real
-Hermes pilot outside ordinary network-dependent CI and make it a separately
-recorded release gate.
+resolved conversations, no direct or force pushes, squash-only merging, and the
+CodeRabbit commit status observed on a real pull request. Do not guess the
+status-check context: install the GitHub App, run one review, then select the
+exact reported check in the branch rules. Consider a merge queue after the
+required checks are stable. Keep the real Hermes pilot outside ordinary
+network-dependent CI and make it a separately recorded release gate.
