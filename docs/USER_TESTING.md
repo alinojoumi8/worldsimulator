@@ -75,5 +75,8 @@ views expose proposal terms, negotiation summary, booked cash/contract/stake
 evidence, before/after cap tables, current ownership, distributions, and the
 same explicit evidence states.
 
-Phase 9 securities-market work has not started. Do not describe exchange,
-trading, IPO, or order-book experiences as available.
+The WS-901 Phase 9 backend slice can persist an eligibility-checked simulated
+listing with exact causal evidence. Order intake, escrow, auction clearing,
+settlement, trader decisions, market API routes, and React market pages are not
+implemented. Do not describe exchange trading, IPO, price-chart, or order-book
+experiences as available to testers yet.

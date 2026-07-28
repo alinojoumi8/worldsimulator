@@ -4936,6 +4936,217 @@ BEFORE DELETE ON replay_agent_lab_submissions
 BEGIN SELECT RAISE(ABORT, 'replay Agent Lab submissions are immutable'); END;
 `;
 
+const PHASE_9_SECURITIES_LISTINGS = `
+CREATE TABLE securities_markets (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (
+    id GLOB 'mkt_[0-9a-z]*' AND length(id) >= 12
+  ),
+  kind TEXT NOT NULL CHECK (kind = 'securities'),
+  operator_institution_id TEXT NOT NULL CHECK (
+    operator_institution_id = 'inst_riverbend_exchange'
+  ),
+  auction_schedule_canonical TEXT NOT NULL CHECK (
+    json_valid(auction_schedule_canonical)
+  ),
+  price_band_bp INTEGER NOT NULL CHECK (price_band_bp = 2000),
+  status TEXT NOT NULL CHECK (status IN ('open', 'halted', 'closed')),
+  opened_tick INTEGER NOT NULL CHECK (opened_tick >= 0),
+  source_event_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, kind),
+  UNIQUE (run_id, source_event_id),
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE securities (
+  run_id TEXT NOT NULL REFERENCES simulation_runs(id),
+  id TEXT NOT NULL CHECK (
+    id GLOB 'sec_[0-9a-z]*' AND length(id) >= 12
+  ),
+  market_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  symbol TEXT NOT NULL CHECK (
+    length(symbol) BETWEEN 2 AND 5 AND
+    symbol GLOB '[A-Z][A-Z0-9]*' AND
+    symbol NOT GLOB '*[^A-Z0-9]*'
+  ),
+  shares_listed TEXT NOT NULL CHECK (
+    shares_listed GLOB '[1-9]*' AND shares_listed NOT GLOB '*[^0-9]*' AND
+    (length(shares_listed) < 19 OR
+      (length(shares_listed) = 19 AND shares_listed <= '9223372036854775807'))
+  ),
+  reference_price_cents TEXT NOT NULL CHECK (
+    reference_price_cents GLOB '[1-9]*' AND
+    reference_price_cents NOT GLOB '*[^0-9]*' AND
+    (length(reference_price_cents) < 19 OR
+      (length(reference_price_cents) = 19 AND
+        reference_price_cents <= '9223372036854775807'))
+  ),
+  listed_tick INTEGER NOT NULL CHECK (listed_tick >= 0),
+  status TEXT NOT NULL CHECK (status IN ('listed', 'suspended', 'delisted')),
+  eligibility_canonical TEXT NOT NULL CHECK (json_valid(eligibility_canonical)),
+  source_event_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, company_id),
+  UNIQUE (run_id, symbol),
+  UNIQUE (run_id, source_event_id),
+  FOREIGN KEY (run_id, market_id)
+    REFERENCES securities_markets(run_id, id),
+  FOREIGN KEY (run_id, company_id)
+    REFERENCES company_cap_tables(run_id, company_id),
+  FOREIGN KEY (run_id, source_event_id) REFERENCES events(run_id, event_id)
+    DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX securities_market_feed
+  ON securities(run_id, market_id, status, listed_tick, id);
+
+CREATE TRIGGER securities_markets_validate_source
+BEFORE INSERT ON securities_markets
+WHEN NOT EXISTS (
+  SELECT 1 FROM events event
+  WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
+    AND event.type = 'market.securities.opened'
+    AND json_extract(event.payload_canonical, '$.marketId') = NEW.id
+    AND json_extract(event.payload_canonical, '$.operatorInstitutionId') =
+      NEW.operator_institution_id
+    AND json_extract(event.payload_canonical, '$.priceBandBp') = NEW.price_band_bp
+    AND json_extract(event.payload_canonical, '$.openedTick') = NEW.opened_tick
+)
+BEGIN SELECT RAISE(ABORT, 'securities market requires its exact opening event'); END;
+
+CREATE TRIGGER securities_markets_identity_immutable
+BEFORE UPDATE OF run_id, id, kind, operator_institution_id,
+  auction_schedule_canonical, price_band_bp, opened_tick, source_event_id
+ON securities_markets
+BEGIN SELECT RAISE(ABORT, 'securities market identity is immutable'); END;
+CREATE TRIGGER securities_markets_status_transition
+BEFORE UPDATE OF status ON securities_markets
+WHEN NOT (
+  (OLD.status = 'open' AND NEW.status IN ('halted', 'closed')) OR
+  (OLD.status = 'halted' AND NEW.status IN ('open', 'closed'))
+)
+BEGIN SELECT RAISE(ABORT, 'invalid securities market status transition'); END;
+CREATE TRIGGER securities_markets_no_delete
+BEFORE DELETE ON securities_markets
+BEGIN SELECT RAISE(ABORT, 'securities markets cannot be deleted'); END;
+
+CREATE TRIGGER securities_validate_listing
+BEFORE INSERT ON securities
+WHEN
+  NEW.status <> 'listed' OR
+  NOT EXISTS (
+    SELECT 1 FROM securities_markets market
+    WHERE market.run_id = NEW.run_id AND market.id = NEW.market_id
+      AND market.kind = 'securities' AND market.status = 'open'
+  ) OR
+  NOT EXISTS (
+    SELECT 1 FROM events event
+    WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
+      AND event.type = 'security.listed'
+      AND json_extract(event.payload_canonical, '$.securityId') = NEW.id
+      AND json_extract(event.payload_canonical, '$.companyId') = NEW.company_id
+      AND json_extract(event.payload_canonical, '$.symbol') = NEW.symbol
+      AND json_extract(event.payload_canonical, '$.sharesListed') = NEW.shares_listed
+      AND json_extract(event.payload_canonical, '$.referencePrice') =
+        NEW.reference_price_cents
+  ) OR
+  json_extract(NEW.eligibility_canonical, '$.policy.version') IS NOT
+    'riverbend_listing_v1' OR
+  json_extract(NEW.eligibility_canonical, '$.companyId') IS NOT NEW.company_id OR
+  json_extract(NEW.eligibility_canonical, '$.assessedTick') IS NOT NEW.listed_tick OR
+  json_extract(NEW.eligibility_canonical, '$.requestedShares') IS NOT
+    NEW.shares_listed OR
+  json_extract(NEW.eligibility_canonical, '$.eligible') IS NOT 1 OR
+  json_extract(NEW.eligibility_canonical, '$.checks.active') IS NOT 1 OR
+  json_extract(NEW.eligibility_canonical, '$.checks.minimumAge') IS NOT 1 OR
+  json_extract(NEW.eligibility_canonical, '$.checks.sharesWithinTotal') IS NOT 1 OR
+  (
+    json_extract(NEW.eligibility_canonical, '$.checks.profitability') IS NOT 1 AND
+    json_extract(NEW.eligibility_canonical, '$.checks.capital') IS NOT 1
+  ) OR
+  NOT EXISTS (
+    SELECT 1 FROM company_cap_tables cap
+    LEFT JOIN companies company
+      ON company.run_id = cap.run_id AND company.id = cap.company_id
+    WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
+      AND cap.total_shares =
+        json_extract(NEW.eligibility_canonical, '$.totalShares')
+      AND CAST(NEW.shares_listed AS INTEGER) <= CAST(cap.total_shares AS INTEGER)
+      AND (
+        (
+          cap.company_kind = 'opening' AND NEW.listed_tick >= 30 AND NOT EXISTS (
+            SELECT 1 FROM company_wind_downs wind_down
+            WHERE wind_down.run_id = cap.run_id
+              AND wind_down.company_id = cap.company_id
+          )
+        ) OR (
+          cap.company_kind = 'dynamic' AND company.status = 'active' AND
+          NEW.listed_tick -
+            COALESCE(company.activated_tick, company.founded_tick, 0) >= 30
+        )
+      )
+      AND (
+        EXISTS (
+          SELECT 1 FROM bank_accounts account
+          WHERE account.run_id = cap.run_id
+            AND account.owner_kind = 'company'
+            AND account.owner_id = cap.company_id
+            AND account.account_type = 'checking' AND account.status = 'active'
+            AND CAST(account.balance_cents AS INTEGER) >= 10000000
+        ) OR (
+          SELECT COALESCE(SUM(
+            CASE
+              WHEN leg.direction = 'debit' AND
+                transaction_row.kind IN ('purchase', 'row_settlement')
+                THEN CAST(leg.amount_cents AS INTEGER)
+              WHEN leg.direction = 'credit' AND
+                transaction_row.kind NOT IN (
+                  'transfer', 'mint', 'loan_disbursement'
+                )
+                THEN -CAST(leg.amount_cents AS INTEGER)
+              ELSE 0
+            END
+          ), 0)
+          FROM ledger_transaction_legs leg
+          JOIN ledger_transactions transaction_row
+            ON transaction_row.run_id = leg.run_id
+            AND transaction_row.id = leg.transaction_id
+          WHERE leg.run_id = cap.run_id
+            AND leg.account_id = (
+              SELECT account.id FROM bank_accounts account
+              WHERE account.run_id = cap.run_id
+                AND account.owner_kind = 'company'
+                AND account.owner_id = cap.company_id
+                AND account.account_type = 'checking'
+                AND account.status = 'active'
+              ORDER BY account.id LIMIT 1
+            )
+            AND transaction_row.tick BETWEEN MAX(0, NEW.listed_tick - 29)
+              AND NEW.listed_tick
+        ) >= 1
+      )
+  )
+BEGIN SELECT RAISE(ABORT, 'security listing fails eligibility or evidence rules'); END;
+
+CREATE TRIGGER securities_identity_immutable
+BEFORE UPDATE OF run_id, id, market_id, company_id, symbol, shares_listed,
+  reference_price_cents, listed_tick, eligibility_canonical, source_event_id
+ON securities
+BEGIN SELECT RAISE(ABORT, 'security listing identity is immutable'); END;
+CREATE TRIGGER securities_status_transition
+BEFORE UPDATE OF status ON securities
+WHEN NOT (
+  (OLD.status = 'listed' AND NEW.status IN ('suspended', 'delisted')) OR
+  (OLD.status = 'suspended' AND NEW.status IN ('listed', 'delisted'))
+)
+BEGIN SELECT RAISE(ABORT, 'invalid security status transition'); END;
+CREATE TRIGGER securities_no_delete
+BEFORE DELETE ON securities
+BEGIN SELECT RAISE(ABORT, 'securities cannot be deleted'); END;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial_phase_1_schema", sql: INITIAL_SCHEMA },
   { version: 2, name: "immutable_snapshots", sql: IMMUTABLE_SNAPSHOTS },
@@ -5085,6 +5296,11 @@ const MIGRATIONS: readonly Migration[] = [
     version: 35,
     name: "phase_12_agent_lab",
     sql: PHASE_12_AGENT_LAB,
+  },
+  {
+    version: 36,
+    name: "phase_9_securities_listings",
+    sql: PHASE_9_SECURITIES_LISTINGS,
   },
 ];
 

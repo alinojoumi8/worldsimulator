@@ -413,6 +413,7 @@ Rules: each phase ends **runnable + tests green**; no phase starts before its de
 - **Deps:** Phase 7. **Risks:** negotiation quality (bounded provider-neutral Tier-3 routing; transcripts remain reviewable).
 
 ### Phase 9 — Simplified securities market [V1]
+- **Current status:** WS-901 listings and eligibility are implemented. WS-902–905 remain staged; no trading or user-facing market experience is claimed yet.
 - **Goal:** FR-SEC-1: listings + daily call auction + settlement + price history.
 - **Modules:** M13, M09/M10 (settlement), M18 (market indicators).
 - **Backend:** eligibility, escrowed orders, clearing algorithm, band enforcement. **Frontend:** market pages (auction results, price charts, order books per auction). **API:** markets endpoints + market events. **DB:** markets, securities, stock_orders, trades, price_history.

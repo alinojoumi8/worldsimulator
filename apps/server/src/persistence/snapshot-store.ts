@@ -851,8 +851,22 @@ function logicalStateHash(
     `),
   };
 
+  const phase9 = {
+    securitiesMarkets: logicalRows(db, runId, `
+      SELECT id, kind, operator_institution_id, auction_schedule_canonical,
+        price_band_bp, status, opened_tick, source_event_id
+      FROM securities_markets WHERE run_id = ? ORDER BY id
+    `),
+    securities: logicalRows(db, runId, `
+      SELECT id, market_id, company_id, symbol, shares_listed,
+        reference_price_cents, listed_tick, status, eligibility_canonical,
+        source_event_id
+      FROM securities WHERE run_id = ? ORDER BY listed_tick, id
+    `),
+  };
+
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 26,
+    stateHashVersion: 27,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
     scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),
@@ -867,6 +881,7 @@ function logicalStateHash(
     phase6,
     phase7,
     phase8,
+    phase9,
   }));
 }
 
