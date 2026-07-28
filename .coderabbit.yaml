@@ -12,6 +12,7 @@ reviews:
   review_details: true
   commit_status: true
   fail_commit_status: true
+  review_progress: false
   poem: false
 
   path_filters:
