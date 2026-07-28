@@ -417,8 +417,27 @@ export class HermesProfileFleet {
         "one or more Hermes processes could not be terminated",
       );
     }
+    const profileRemovalErrors: unknown[] = [];
+    const retainedProfileRoots: string[] = [];
     for (const root of this.profileRoots.splice(0)) {
-      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      try {
+        rmSync(root, {
+          recursive: true,
+          force: true,
+          maxRetries: 50,
+          retryDelay: 100,
+        });
+      } catch (error) {
+        retainedProfileRoots.push(root);
+        profileRemovalErrors.push(error);
+      }
+    }
+    this.profileRoots.push(...retainedProfileRoots);
+    if (profileRemovalErrors.length > 0) {
+      throw new AggregateError(
+        profileRemovalErrors,
+        "one or more Hermes profile roots could not be removed",
+      );
     }
   }
 }

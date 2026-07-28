@@ -65,6 +65,7 @@ import {
 import { releaseIssues } from "./report";
 import {
   assertFreshStudyDirectory,
+  collectTrialCleanupErrors,
   driveExternalAdvance,
   driveShadowTurns,
   runStudy,
@@ -872,6 +873,29 @@ describe("Agent Lab harness", () => {
     await expect(terminateHermesProcess(child)).resolves.toBeUndefined();
     expect(kill).toHaveBeenCalledOnce();
     expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("attempts every trial cleanup step and returns all failures", async () => {
+    const calls: string[] = [];
+    const firstFailure = new Error("profile cleanup failed");
+    const secondFailure = new Error("runtime cleanup failed");
+
+    const errors = await collectTrialCleanupErrors([
+      () => {
+        calls.push("fleet");
+        throw firstFailure;
+      },
+      async () => {
+        calls.push("app");
+      },
+      () => {
+        calls.push("runtime");
+        throw secondFailure;
+      },
+    ]);
+
+    expect(calls).toEqual(["fleet", "app", "runtime"]);
+    expect(errors).toEqual([firstFailure, secondFailure]);
   });
 
   it("does not replace redaction markers with short secret fragments", () => {

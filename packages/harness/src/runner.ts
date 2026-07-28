@@ -68,6 +68,20 @@ export function assertFreshStudyDirectory(studyDirectory: string): void {
   }
 }
 
+export async function collectTrialCleanupErrors(
+  steps: readonly (() => void | Promise<void>)[],
+): Promise<readonly unknown[]> {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
 export interface RunStudyOptions {
   readonly studyDirectory: string;
   readonly allowDirty?: boolean;
@@ -527,6 +541,7 @@ async function runTrial(
     webRoot: false,
   });
   const fleet = new HermesProfileFleet(runtimeRoot, options.hermesExecutable);
+  let trialFailure: unknown;
   try {
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = new URL(address).origin;
@@ -716,16 +731,33 @@ async function runTrial(
       replay,
       hermesRuns,
     });
+  } catch (error) {
+    trialFailure = error;
+    throw error;
   } finally {
-    await fleet.stop();
-    await app.close();
-    if (!options.keepRuntime) {
-      rmSync(runtimeRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 100,
-      });
+    const cleanupErrors = await collectTrialCleanupErrors([
+      () => fleet.stop(),
+      () => app.close(),
+      ...(!options.keepRuntime
+        ? [(): void => {
+            rmSync(runtimeRoot, {
+              recursive: true,
+              force: true,
+              maxRetries: 50,
+              retryDelay: 100,
+            });
+          }]
+        : []),
+    ]);
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        trialFailure === undefined
+          ? cleanupErrors
+          : [trialFailure, ...cleanupErrors],
+        trialFailure === undefined
+          ? "Agent Lab trial cleanup was incomplete"
+          : "Agent Lab trial failed and cleanup was incomplete",
+      );
     }
   }
 }
