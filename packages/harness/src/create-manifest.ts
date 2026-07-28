@@ -22,8 +22,10 @@ import {
 
 const DEFAULT_GENERATION_BUDGET = Object.freeze({
   maxAgentLoopIterations: 8,
-  maxInputTokens: 8_000,
-  maxOutputTokens: 1_000,
+  // Hermes reports usage for the complete multi-iteration run, not one model
+  // request. These limits therefore cover the whole bounded citizen turn.
+  maxInputTokens: 64_000,
+  maxOutputTokens: 8_000,
   maxToolCalls: 8,
 });
 
@@ -64,7 +66,9 @@ export function createPilotManifest(input: Readonly<{
       ticks: 60,
       budgets: {
         runCostCentsMax: "500",
-        perAgentDailyTokens: 10_000,
+        perAgentDailyTokens:
+          DEFAULT_GENERATION_BUDGET.maxInputTokens +
+          DEFAULT_GENERATION_BUDGET.maxOutputTokens,
       },
       policyOverrides: {},
       opportunityFixture: agentLabPilotOpportunityFixture(),

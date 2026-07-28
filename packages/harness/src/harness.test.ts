@@ -2728,6 +2728,13 @@ describe("Agent Lab harness", () => {
       version: AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
       ticks: [...AGENT_LAB_PILOT_FIXTURE_TICKS],
     });
+    expect(created.generationBudget).toMatchObject({
+      maxAgentLoopIterations: 8,
+      maxInputTokens: 64_000,
+      maxOutputTokens: 8_000,
+      maxToolCalls: 8,
+    });
+    expect(created.scenario.budgets.perAgentDailyTokens).toBe(72_000);
     expect(created.engine.dependencies["node"]).toBe(process.version);
     expect(created.engine.dependencies["pnpm-lock-sha256"]).toMatch(/^[0-9a-f]{64}$/);
   });
