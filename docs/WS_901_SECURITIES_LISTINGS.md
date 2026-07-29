@@ -1,0 +1,54 @@
+# WS-901 — Securities listings and eligibility
+
+## Outcome
+
+WS-901 establishes the first authoritative Phase 9 securities state without claiming that trading exists. A Riverbend company may be listed only when it is active, at least 30 ticks old, has either positive trailing 30-tick operating profit or at least $100,000 aggregated across its active checking accounts, and lists no more shares than its authoritative cap table contains.
+
+The shared contract fixes the pilot policy as `riverbend_listing_v1`. Symbols are two to five uppercase alphanumeric characters beginning with a letter, reference prices and listed shares are positive signed-64-bit integers, and the exchange uses a deterministic daily call schedule with a ±20% price band reserved for WS-903.
+
+## Authoritative listing path
+
+`SqliteSecuritiesStore.listSecurity` performs one bounded path:
+
+1. Strictly parse the command and verify its causal trigger.
+2. Require the run's currently executing next tick, then recompute company status, age, trailing profit, active checking balance, and current cap table from authoritative projections.
+3. Reject malformed, ineligible, or duplicate company/symbol requests before consuming IDs.
+4. Open the singleton Riverbend securities market when needed and emit `market.securities.opened`.
+5. Emit the exact documented `security.listed` payload and persist its eligibility receipt.
+
+The store never treats a listing as an order, trade, IPO allocation, or price discovery result. Those behaviors remain assigned to WS-902–905.
+
+## Persistence guarantees
+
+Migration 36 adds `securities_markets` and `securities`. Constraints and triggers independently require:
+
+- the fixed Riverbend exchange identity, daily schedule, and 2,000-basis-point band;
+- one market, one listing per company, and one company per symbol in each run;
+- an active company with the required age and capital-or-profit basis;
+- listed shares within the authoritative cap-table total;
+- exact typed opening/listing source events and eligibility fields;
+- listing only at `simulation_runs.current_tick + 1`, so current account balances are
+  never certified as a historical capital snapshot;
+- immutable listing identity and controlled market/security status transitions; and
+- no destructive deletion of authoritative market or listing rows.
+
+Logical state-hash version 27 includes both projections so replay and snapshot comparisons cannot omit listing state.
+
+## Verification coverage
+
+- Shared rule tests cover age, active status, profitability, capitalization, cap-table bounds, strict schemas, and signed-SQLite limits.
+- Persistence integration covers exact events, duplicate rejection without ID consumption, nested listing-write rollback, logical-hash inclusion, database reopen, and forged direct-listing rejection.
+- Migration coverage proves 35-to-36 upgrade and reopen behavior.
+
+Required handoff gate:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
+Verified on 2026-07-28: all four commands passed. Vitest reported 145 files
+and 777 tests green; the production build completed with only the existing
+chunk-size advisory.

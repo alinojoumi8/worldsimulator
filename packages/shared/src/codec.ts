@@ -210,7 +210,14 @@ export class IdFactory {
   /** Next id for a prefix, e.g. next("agt") → "agt_00000001". */
   next(prefix: string): string {
     if (!ID_PREFIX_PATTERN.test(prefix)) throw new CodecError(`invalid id prefix: ${prefix}`);
-    const value = (this.counters.get(prefix) ?? 0) + 1;
+    const current = this.counters.get(prefix) ?? 0;
+    if (
+      !Number.isSafeInteger(current) ||
+      current >= Number.MAX_SAFE_INTEGER - 1
+    ) {
+      throw new CodecError(`id counter exhausted for prefix: ${prefix}`);
+    }
+    const value = current + 1;
     this.counters.set(prefix, value);
     return `${prefix}_${value.toString(36).padStart(8, "0")}`;
   }
@@ -220,10 +227,24 @@ export class IdFactory {
     return Object.fromEntries(entries) as Record<string, number>;
   }
 
+  /** Replaces all counters with a validated snapshot for checkpoint rollback. */
+  restore(state: Record<string, number>): void {
+    const restored = IdFactory.restore(state);
+    this.counters.clear();
+    for (const [prefix, value] of restored.counters) {
+      this.counters.set(prefix, value);
+    }
+  }
+
   static restore(state: Record<string, number>): IdFactory {
     const factory = new IdFactory();
     for (const [prefix, value] of Object.entries(state)) {
-      if (!ID_PREFIX_PATTERN.test(prefix) || !Number.isInteger(value) || value < 0) {
+      if (
+        !ID_PREFIX_PATTERN.test(prefix) ||
+        !Number.isSafeInteger(value) ||
+        value < 0 ||
+        value >= Number.MAX_SAFE_INTEGER
+      ) {
         throw new CodecError(`invalid id factory state entry: ${prefix}=${value}`);
       }
       factory.counters.set(prefix, value);

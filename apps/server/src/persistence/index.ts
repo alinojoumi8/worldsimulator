@@ -33,6 +33,7 @@ export * from "./run-locator";
 export * from "./run-repository";
 export * from "./scheduler";
 export * from "./sentiment-store";
+export * from "./securities-store";
 export * from "./snapshot-store";
 export * from "./tick-committer";
 export * from "./venture-store";

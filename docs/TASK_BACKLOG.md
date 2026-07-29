@@ -417,6 +417,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 ## Phase 9 — Securities market [V1]
 
 ### WS-901 — Listings & eligibility `M13` · `backend` · `M` · deps: WS-803 · Ind? yes — **Do:** listing rules, Security entity, IPO event. **Accept:** eligibility enforced. **Tests:** rule tests.
+**Status:** implemented. Strict shared schemas define the Riverbend exchange, listing policy, eligibility assessment, securities, and exact opening/listing event payloads. Migration 36 adds immutable market/security projections with independent trigger enforcement for active-company status, minimum age, capital-or-profit qualification, cap-table bounds, exact causal events, and controlled status transitions. The SQLite store rejects malformed, ineligible, or duplicate requests before consuming IDs; listing state is included in logical state-hash v27 and covered by rule, persistence, tamper, migration-upgrade, reopen, and rollback tests. See [WS-901 evidence](WS_901_SECURITIES_LISTINGS.md).
 ### WS-902 — Order intake & escrow `M13/M09` · `backend` · `M` · deps: WS-901 · Ind? no — **Do:** limit orders, cash/share escrow at placement, cancels. **Accept:** no naked orders. **Tests:** escrow properties.
 ### WS-903 — Call auction & settlement `M13` · `backend` · `L` · deps: WS-902 · Ind? no — **Do:** volume-maximizing clearing price, deterministic tie-breaks, atomic settlement, ±20% band. **Accept:** INV-7; FR-SEC-1 ACs. **Tests:** clearing property tests, band tests.
 ### WS-904 — Trader decisions `M04` · `backend` · `M` · deps: WS-903 · Ind? no — **Do:** Tier-1/2 order decisions for eligible agents/VC. **Accept:** funded-only orders. **Tests:** decision bounds.
@@ -470,7 +471,7 @@ Derived from [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phases. Task ID sc
 
 **Pre-Phase-12 totals:** 7 (P0) + 10 (P1) + 9 (P2) + 10 (P3) + 9 (P4) + 8 (P5) + 10 (P6) + 10 (P7) + 5 (P8) + 5 (P9) + 4 (P10) + 6 (P11) = **93 tasks.** Phase 12 adds six research tickets.
 
-Current boundary (2026-07-24): the pre-Phase-12 roadmap stands at **78 complete**, **0 in progress**, and **15 not started** (WS-901–1106). Phase 8 is accepted and WS-901 is the next planned ticket. Within Phase 12, WS-1201–1204 have an implemented foundation, WS-1205 is an unrun release gate, and WS-1206 is intentionally staged after measurement.
+Current boundary (2026-07-28): the pre-Phase-12 roadmap stands at **79 complete**, **0 in progress**, and **14 not started** (WS-902–1106). WS-901 listings and eligibility are accepted; WS-902 order intake and escrow is the next planned ticket. Within Phase 12, WS-1201–1204 have an implemented foundation, WS-1205 is an open release gate, and WS-1206 is intentionally staged after measurement.
 
 General-purpose citizen tools, arbitrary connectors, real external accounts,
 shell/browser/filesystem/delegation access, and real-money integration remain

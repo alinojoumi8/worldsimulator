@@ -30,6 +30,7 @@ export * from "./rng";
 export * from "./replay";
 export * from "./simulation";
 export * from "./sentiment";
+export * from "./securities";
 export * from "./version";
 export * from "./venture";
 export * from "./world-event";

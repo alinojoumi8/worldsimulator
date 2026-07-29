@@ -95,6 +95,20 @@ describe("IdFactory", () => {
     ids.next("agt");
     const restored = IdFactory.restore(ids.serialize());
     expect(restored.next("agt")).toBe("agt_00000003");
+
+    ids.next("txn");
+    ids.next("tmp");
+    ids.restore({ agt: 1, txn: 3 });
+    expect(ids.next("agt")).toBe("agt_00000002");
+    expect(ids.next("txn")).toBe("txn_00000004");
+    expect(ids.next("tmp")).toBe("tmp_00000001");
+
+    const checkpoint = ids.serialize();
+    expect(() => ids.restore({ agt: 99, Invalid: 1 })).toThrow(CodecError);
+    expect(() => ids.restore({
+      agt: Number.MAX_SAFE_INTEGER,
+    })).toThrow(CodecError);
+    expect(ids.serialize()).toEqual(checkpoint);
   });
 
   it("rejects invalid prefixes and corrupt state", () => {
@@ -102,5 +116,21 @@ describe("IdFactory", () => {
     expect(() => ids.next("Agt")).toThrow(CodecError);
     expect(() => ids.next("")).toThrow(CodecError);
     expect(() => IdFactory.restore({ agt: -1 })).toThrow(CodecError);
+    expect(() => IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER,
+    })).toThrow(CodecError);
+    expect(() => IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER + 1,
+    })).toThrow(CodecError);
+
+    const nearLimit = IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER - 2,
+    });
+    expect(nearLimit.next("agt")).toBe(
+      `agt_${(Number.MAX_SAFE_INTEGER - 1).toString(36)}`,
+    );
+    expect(IdFactory.restore(nearLimit.serialize()).serialize())
+      .toEqual(nearLimit.serialize());
+    expect(() => nearLimit.next("agt")).toThrow(/counter exhausted/);
   });
 });
