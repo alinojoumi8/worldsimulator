@@ -119,6 +119,7 @@ describe("securities listing eligibility", () => {
         profit30Cents: "0",
         capitalCents: "9999999",
       },
+      expectedBasis: null,
       expectedChecks: {
         active: true,
         minimumAge: true,
@@ -138,7 +139,11 @@ describe("securities listing eligibility", () => {
         sharesWithinTotal: false,
       },
     },
-  ])("rejects $label companies", ({ changes, expectedChecks }) => {
+  ])("rejects $label companies", ({
+    changes,
+    expectedChecks,
+    expectedBasis = "profitability",
+  }) => {
     const input = {
       ...eligibleInput,
       ...changes,
@@ -147,6 +152,7 @@ describe("securities listing eligibility", () => {
     const replayed = assessSecuritiesListingEligibility(input);
     expect(first).toMatchObject({
       eligible: false,
+      eligibilityBasis: expectedBasis,
       checks: expectedChecks,
     });
     expect(replayed).toEqual(first);

@@ -26,6 +26,7 @@ import {
   openWorldDatabase,
   WORLD_DATABASE_MIGRATION_COUNT,
   worldDatabasePath,
+  type WorldDatabase,
 } from "./database";
 import {
   insertTestRun,
@@ -42,6 +43,14 @@ function temporaryDirectory(): string {
   const path = mkdtempSync(join(tmpdir(), "worldtangle-db-"));
   temporaryDirectories.push(path);
   return path;
+}
+
+function resetToPreSecuritiesState(db: WorldDatabase): void {
+  db.exec(`
+    DROP TABLE securities;
+    DROP TABLE securities_markets;
+    DELETE FROM schema_migrations WHERE version = 36;
+  `);
 }
 
 afterEach(() => {
@@ -747,10 +756,8 @@ describe("world database", () => {
       WHERE run_id = ? AND conversation_id = ?
     `).get(TEST_RUN_ID, conversation.id)!.count;
     expect(relationshipHistoryCount).toBeGreaterThan(0n);
+    resetToPreSecuritiesState(db);
     db.exec(`
-      DROP TABLE securities;
-      DROP TABLE securities_markets;
-      DELETE FROM schema_migrations WHERE version = 36;
       DROP TRIGGER events_validate_investment_distribution;
       DROP TABLE investment_distribution_allocations;
       DROP TABLE investment_distributions;
@@ -896,10 +903,8 @@ describe("world database", () => {
     const openingCompanies = db.prepare<[string], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM opening_company_equity WHERE run_id = ?
     `).get(TEST_RUN_ID)!.count;
+    resetToPreSecuritiesState(db);
     db.exec(`
-      DROP TABLE securities;
-      DROP TABLE securities_markets;
-      DELETE FROM schema_migrations WHERE version = 36;
       DROP TRIGGER events_validate_investment_distribution;
       DROP TABLE investment_distribution_allocations;
       DROP TABLE investment_distributions;
@@ -1083,11 +1088,7 @@ describe("world database", () => {
   it("upgrades version-35 state with securities listing tables", () => {
     const path = join(temporaryDirectory(), "securities-listing-upgrade.db");
     const db = openDatabaseFile(path);
-    db.exec(`
-      DROP TABLE securities;
-      DROP TABLE securities_markets;
-      DELETE FROM schema_migrations WHERE version = 36;
-    `);
+    resetToPreSecuritiesState(db);
     db.close();
 
     const upgraded = openDatabaseFile(path);

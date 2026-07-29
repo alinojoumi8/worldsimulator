@@ -105,6 +105,9 @@ describe("IdFactory", () => {
 
     const checkpoint = ids.serialize();
     expect(() => ids.restore({ agt: 99, Invalid: 1 })).toThrow(CodecError);
+    expect(() => ids.restore({
+      agt: Number.MAX_SAFE_INTEGER,
+    })).toThrow(CodecError);
     expect(ids.serialize()).toEqual(checkpoint);
   });
 
@@ -113,5 +116,21 @@ describe("IdFactory", () => {
     expect(() => ids.next("Agt")).toThrow(CodecError);
     expect(() => ids.next("")).toThrow(CodecError);
     expect(() => IdFactory.restore({ agt: -1 })).toThrow(CodecError);
+    expect(() => IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER,
+    })).toThrow(CodecError);
+    expect(() => IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER + 1,
+    })).toThrow(CodecError);
+
+    const nearLimit = IdFactory.restore({
+      agt: Number.MAX_SAFE_INTEGER - 2,
+    });
+    expect(nearLimit.next("agt")).toBe(
+      `agt_${(Number.MAX_SAFE_INTEGER - 1).toString(36)}`,
+    );
+    expect(IdFactory.restore(nearLimit.serialize()).serialize())
+      .toEqual(nearLimit.serialize());
+    expect(() => nearLimit.next("agt")).toThrow(/counter exhausted/);
   });
 });

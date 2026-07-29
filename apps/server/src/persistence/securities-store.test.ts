@@ -254,6 +254,37 @@ describe("SqliteSecuritiesStore", () => {
     expect(state.ids.serialize()).toEqual(checkpoint);
   });
 
+  it("fails closed for missing companies and inactive checking accounts", () => {
+    const missingCompanyState = fixture();
+    const input = {
+      companyId: "biz_missing_company",
+      symbol: "MIS",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+    } as const;
+    const missingCheckpoint = missingCompanyState.ids.serialize();
+    expect(() => missingCompanyState.store.assess(input, 30))
+      .toThrow(/cap table .* does not exist/);
+    expect(missingCompanyState.ids.serialize()).toEqual(missingCheckpoint);
+    expect(missingCompanyState.store.market()).toBeNull();
+    expect(missingCompanyState.store.list()).toEqual([]);
+
+    const inactiveAccountState = fixture();
+    inactiveAccountState.db.prepare(`
+      UPDATE bank_accounts SET status = 'frozen'
+      WHERE run_id = ? AND owner_kind = 'company' AND owner_id = ?
+        AND account_type = 'checking' AND status = 'active'
+    `).run(TEST_RUN_ID, inactiveAccountState.companyId);
+    const inactiveCheckpoint = inactiveAccountState.ids.serialize();
+    expect(() => inactiveAccountState.store.assess({
+      ...input,
+      companyId: inactiveAccountState.companyId,
+    }, 30)).toThrow(/lacks an active checking account/);
+    expect(inactiveAccountState.ids.serialize()).toEqual(inactiveCheckpoint);
+    expect(inactiveAccountState.store.market()).toBeNull();
+    expect(inactiveAccountState.store.list()).toEqual([]);
+  });
+
   it("creates one exchange and an event-backed listed security", () => {
     const state = fixture();
     const beforeHash = computeLogicalStateHash(state.db, TEST_RUN_ID);

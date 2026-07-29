@@ -50,5 +50,5 @@ pnpm build
 ```
 
 Verified on 2026-07-28: all four commands passed. Vitest reported 145 files
-and 776 tests green; the production build completed with only the existing
+and 777 tests green; the production build completed with only the existing
 chunk-size advisory.
