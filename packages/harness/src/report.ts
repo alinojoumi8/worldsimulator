@@ -241,14 +241,15 @@ function nonNativeFixtureEvidenceIssues(
     issues.push(`${trial.artifact.trialId} fixture schedule has a nonterminal receipt`);
   }
   const hermesEvidence = trial.artifact.statistics.fixtureHermesEvidenceSchedule;
-  const hermesEvidenceKeys = observedFixtureMatrixKeys(hermesEvidence);
   const fixtureTurnIds = schedule.map((entry) => entry.turnId);
   const hermesEvidenceTurnIds = hermesEvidence.map((entry) => entry.turnId);
   if (
-    hermesEvidence.length !== expectedAgentTurns ||
-    new Set(hermesEvidenceKeys).size !== hermesEvidenceKeys.length ||
-    new Set(hermesEvidenceTurnIds).size !== hermesEvidenceTurnIds.length ||
-    canonicalStringify(hermesEvidenceKeys) !== canonicalStringify(expectedKeys) ||
+    !matchesFixtureMatrix(
+      hermesEvidence,
+      hermesEvidenceTurnIds,
+      expectedAgentTurns,
+      expectedKeys,
+    ) ||
     canonicalStringify(hermesEvidenceTurnIds) !== canonicalStringify(fixtureTurnIds)
   ) {
     issues.push(

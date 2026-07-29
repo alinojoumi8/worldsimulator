@@ -275,9 +275,10 @@ fixture-turn, or Hermes sidecar evidence. Raw event-hash invariance for shadow
 sidecar activity remains a separate same-manifest integration gate.
 A zero-turn study is never release-eligible.
 Existing schema-v1 artifacts remain schema-readable: the newer fixture
-counters, fixture turn schedule, and per-turn Hermes evidence schedule default
-to empty when absent, so no participation is invented. The authoritative
-fixture schedule is required; artifacts without it fail schema parsing.
+counters, fixture turn schedule, authoritative fixture schedule, and per-turn
+Hermes evidence schedule default to empty when absent, so no participation is
+invented. An authoritative fixture entry that does not reference a scheduled
+fixture turn still fails schema parsing.
 Artifacts that predate captured runtime Agent Lab configuration remain
 release-ineligible and now fail artifact verification because their pinned
 cohort and fixture matrix cannot be reconstructed from authenticated evidence.

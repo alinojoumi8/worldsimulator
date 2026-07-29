@@ -3930,6 +3930,28 @@ describe("Agent Lab harness", () => {
     );
   });
 
+  it("reports misordered Hermes fixture evidence without crashing", () => {
+    const parsed = validateExperimentManifest(manifest());
+    const malformed = releaseTrials();
+    const shadow = releaseTrial("shadow", 11, 1);
+    replaceReleaseTrial(malformed, "shadow", 11, 1, {
+      ...shadow,
+      artifact: {
+        ...shadow.artifact,
+        statistics: {
+          ...shadow.artifact.statistics,
+          fixtureHermesEvidenceSchedule: [
+            ...shadow.artifact.statistics.fixtureHermesEvidenceSchedule,
+          ].reverse(),
+        },
+      },
+    });
+
+    expect(releaseIssues(parsed, malformed).join("\n")).toMatch(
+      /Hermes evidence does not cover every pinned fixture turn/,
+    );
+  });
+
   it("requires successful tokens, tools, and budgets for each fixture turn", () => {
     const parsed = validateExperimentManifest(manifest());
     const incomplete = releaseTrials();
