@@ -28,7 +28,14 @@ const eligibleInput = {
 } as const;
 
 describe("securities listing eligibility", () => {
-  it("pins the transaction kinds used by the version-1 profit policy", () => {
+  it("pins the version-1 policy thresholds and transaction kinds", () => {
+    // Migration 36 pins the matching SQL bytes and checksum independently.
+    expect(RIVERBEND_SECURITIES_LISTING_POLICY).toEqual({
+      version: "riverbend_listing_v1",
+      minimumAgeTicks: 30,
+      minimumProfit30Cents: "1",
+      minimumCapitalCents: "10000000",
+    });
     expect(SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS).toEqual([
       "purchase",
       "row_settlement",

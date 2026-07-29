@@ -4,7 +4,7 @@
 
 WS-901 establishes the first authoritative Phase 9 securities state without claiming that trading exists. A Riverbend company may be listed only when it is active, at least 30 ticks old, has either positive trailing 30-tick operating profit or at least $100,000 in its active checking account, and lists no more shares than its authoritative cap table contains.
 
-The shared contract fixes the pilot policy as `riverbend_listing_v1`. Symbols are two to five uppercase alphanumeric characters, reference prices and listed shares are positive signed-64-bit integers, and the exchange uses a deterministic daily call schedule with a ±20% price band reserved for WS-903.
+The shared contract fixes the pilot policy as `riverbend_listing_v1`. Symbols are two to five uppercase alphanumeric characters beginning with a letter, reference prices and listed shares are positive signed-64-bit integers, and the exchange uses a deterministic daily call schedule with a ±20% price band reserved for WS-903.
 
 ## Authoritative listing path
 
@@ -22,7 +22,7 @@ The store never treats a listing as an order, trade, IPO allocation, or price di
 
 Migration 36 adds `securities_markets` and `securities`. Constraints and triggers independently require:
 
-- the loopback Riverbend exchange identity, daily schedule, and 2,000-basis-point band;
+- the fixed Riverbend exchange identity, daily schedule, and 2,000-basis-point band;
 - one market, one listing per company, and one company per symbol in each run;
 - an active company with the required age and capital-or-profit basis;
 - listed shares within the authoritative cap-table total;

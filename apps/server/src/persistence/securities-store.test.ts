@@ -460,6 +460,7 @@ describe("SqliteSecuritiesStore", () => {
     );
     const forgedEligibility = {
       ...listed.eligibility,
+      assessedTick: 31,
       requestedShares: "20000",
       checks: {
         ...listed.eligibility.checks,
