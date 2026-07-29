@@ -33,7 +33,7 @@ export const RIVERBEND_SECURITIES_PRICE_BAND_BP = 2_000;
 export const RIVERBEND_SECURITIES_AUCTION_SCHEDULE = Object.freeze({
   frequencyTicks: 1,
   offsetTick: 0,
-});
+} as const);
 export const SECURITIES_LISTING_POLICY_VERSION = "riverbend_listing_v1";
 
 export const securitiesListingPolicySchema = z.object({
