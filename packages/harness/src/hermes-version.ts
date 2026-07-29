@@ -57,19 +57,6 @@ function parseHermesCliVersion(output: string): HermesCliVersion {
   });
 }
 
-export function parseHermesVersionOutput(output: string): HermesRuntimeVersion {
-  const cli = parseHermesCliVersion(output);
-  const lines = versionLines(output);
-  return Object.freeze({
-    version: cli.version,
-    pythonVersion: cli.pythonVersion,
-    openAiSdkVersion: cli.openAiSdkVersion,
-    mcpSdkVersion: requiredLine(lines, "MCP SDK:", "its MCP SDK version"),
-    starletteVersion: requiredLine(lines, "Starlette:", "its Starlette version"),
-    aiohttpVersion: requiredLine(lines, "aiohttp:", "its aiohttp version"),
-  });
-}
-
 function hermesPythonExecutable(
   executable: string,
   installDirectory: string,
@@ -96,14 +83,46 @@ function hermesPythonExecutable(
   return python;
 }
 
-function inspectPythonPackages(
-  executable: string,
-  installDirectory: string,
+export function parseHermesDependencyInspectionOutput(
+  output: string,
 ): Readonly<{
   mcpSdkVersion: string;
   starletteVersion: string;
   aiohttpVersion: string;
 }> {
+  let parsed: Readonly<Record<string, unknown>>;
+  try {
+    parsed = JSON.parse(
+      output.trim().split(/\r?\n/).at(-1) ?? "",
+    ) as Readonly<Record<string, unknown>>;
+  } catch (error) {
+    throw new Error(
+      "Hermes runtime dependency inspection did not return JSON; " +
+        "ensure the pinned venv Python starts cleanly: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const required = (name: string): string => {
+    const value = parsed[name];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(
+        `Hermes runtime is missing required optional dependency ${name}; ` +
+          "install the pinned Hermes MCP/API-server extras",
+      );
+    }
+    return value;
+  };
+  return Object.freeze({
+    mcpSdkVersion: required("mcp"),
+    starletteVersion: required("starlette"),
+    aiohttpVersion: required("aiohttp"),
+  });
+}
+
+function inspectPythonPackages(
+  executable: string,
+  installDirectory: string,
+): ReturnType<typeof parseHermesDependencyInspectionOutput> {
   const python = hermesPythonExecutable(executable, installDirectory);
   const script = [
     "import importlib.metadata as metadata",
@@ -121,22 +140,7 @@ function inspectPythonPackages(
     windowsHide: true,
     timeout: 30_000,
   });
-  const parsed = JSON.parse(output) as Readonly<Record<string, unknown>>;
-  const required = (name: string): string => {
-    const value = parsed[name];
-    if (typeof value !== "string" || value.length === 0) {
-      throw new Error(
-        `Hermes runtime is missing required optional dependency ${name}; ` +
-          "install the pinned Hermes MCP/API-server extras",
-      );
-    }
-    return value;
-  };
-  return Object.freeze({
-    mcpSdkVersion: required("mcp"),
-    starletteVersion: required("starlette"),
-    aiohttpVersion: required("aiohttp"),
-  });
+  return parseHermesDependencyInspectionOutput(output);
 }
 
 export function inspectHermesRuntime(

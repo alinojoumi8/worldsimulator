@@ -396,7 +396,7 @@ describe("Agent Lab contracts", () => {
 
   it("pins prompt bytes, tool schemas, engine, and attempts", () => {
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
       studyId: "riverbend-realism",
       scenario: {

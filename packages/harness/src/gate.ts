@@ -19,7 +19,7 @@ const budget = {
   maxToolCalls: 8,
 };
 const manifest = validateExperimentManifest({
-  schemaVersion: 1,
+  schemaVersion: 2,
   protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
   studyId: "agent-lab-offline-gate",
   scenario: {

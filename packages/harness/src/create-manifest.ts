@@ -10,15 +10,13 @@ import {
 } from "@worldtangle/shared";
 import {
   CITIZEN_TURN_PROMPT,
+  MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK,
   agentLabDriverPolicyDigest,
   agentLabPilotOpportunityFixture,
   agentLabPromptDigest,
   agentLabToolPins,
 } from "./driver-policy";
-import {
-  inspectHermesRuntime,
-  parseHermesVersionOutput,
-} from "./hermes-version";
+import { inspectHermesRuntime } from "./hermes-version";
 
 const DEFAULT_GENERATION_BUDGET = Object.freeze({
   maxAgentLoopIterations: 8,
@@ -28,6 +26,8 @@ const DEFAULT_GENERATION_BUDGET = Object.freeze({
   maxOutputTokens: 8_000,
   maxToolCalls: 8,
 });
+const PILOT_COHORT_SIZE = 8;
+const MICROCENTS_PER_CENT = 1_000_000n;
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -48,15 +48,42 @@ export function createPilotManifest(input: Readonly<{
   outputMicrocentsPerToken: number;
   providerEnvAllowlist: string;
   hermesExecutable?: string;
-  hermesVersionOutput?: string;
   createdWall?: string;
 }>): ExperimentManifest {
   const generationBudget = DEFAULT_GENERATION_BUDGET;
-  const hermes = input.hermesVersionOutput === undefined
-    ? inspectHermesRuntime(input.hermesExecutable)
-    : parseHermesVersionOutput(input.hermesVersionOutput);
+  const hermes = inspectHermesRuntime(input.hermesExecutable);
+  const opportunityFixture = agentLabPilotOpportunityFixture();
+  if (PILOT_COHORT_SIZE > MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK) {
+    throw new Error(
+      "pilot cohort exceeds the pinned shadow-turn credential limit",
+    );
+  }
+  for (const [label, value] of [
+    ["inputMicrocentsPerToken", input.inputMicrocentsPerToken],
+    ["outputMicrocentsPerToken", input.outputMicrocentsPerToken],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${label} must be a nonnegative safe integer`);
+    }
+  }
+  const worstCaseTurnTokens =
+    generationBudget.maxInputTokens + generationBudget.maxOutputTokens;
+  const worstCaseTurnMicrocents =
+    BigInt(generationBudget.maxInputTokens) *
+      BigInt(input.inputMicrocentsPerToken) +
+    BigInt(generationBudget.maxOutputTokens) *
+      BigInt(input.outputMicrocentsPerToken);
+  const pinnedTurnCount =
+    new Set(opportunityFixture.ticks).size * PILOT_COHORT_SIZE;
+  const pinnedRunMicrocents =
+    BigInt(pinnedTurnCount) * worstCaseTurnMicrocents;
+  const runCostCentsMax = pinnedRunMicrocents === 0n
+    ? 1n
+    : (
+        pinnedRunMicrocents + MICROCENTS_PER_CENT - 1n
+      ) / MICROCENTS_PER_CENT;
   return experimentManifestSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
     studyId: input.studyId,
     scenario: {
@@ -65,17 +92,15 @@ export function createPilotManifest(input: Readonly<{
       seeds: [41, 42, 43],
       ticks: 60,
       budgets: {
-        runCostCentsMax: "500",
-        perAgentDailyTokens:
-          DEFAULT_GENERATION_BUDGET.maxInputTokens +
-          DEFAULT_GENERATION_BUDGET.maxOutputTokens,
+        runCostCentsMax: runCostCentsMax.toString(),
+        perAgentDailyTokens: worstCaseTurnTokens,
       },
       policyOverrides: {},
-      opportunityFixture: agentLabPilotOpportunityFixture(),
+      opportunityFixture,
     },
     cohort: {
       strategy: "stable_stratified_v1",
-      size: 8,
+      size: PILOT_COHORT_SIZE,
       controller: "shadow",
       strata: ["occupation", "employment_status", "household"],
     },

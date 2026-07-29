@@ -193,13 +193,16 @@ variables plus the manifest-allowlisted provider variables; unrelated parent
 secrets do not cross the profile boundary. Credential files are ephemeral and
 excluded from artifacts.
 
-New manifests pin `stable_driver_v2`, including the bounded shadow-turn circuit
-breaker. The normal manifest loader and release reporter require that current
-digest. The explicitly named archive verifier also recognizes the exact
-historical `stable_driver_v1` digest so archived artifacts remain verifiable
-and their recorded external inputs remain available to offline replay.
-`lab:run` still refuses a v1 manifest object under v2 behavior; a new live trial
-must be regenerated and explicitly pins the current policy.
+New experiment manifests use schema v2 and pin `stable_driver_v2`, including the
+bounded shadow-turn circuit breaker and the inspected MCP, Starlette, and
+aiohttp versions. The normal manifest loader and release reporter require that
+current schema and digest. The explicitly named archive verifier migrates a
+strict schema-v1 manifest into a verification-only representation, marks its
+three unavailable runtime pins, and recognizes the exact historical
+`stable_driver_v1` digest. This preserves archived artifact verification and
+offline replay without inventing dependency evidence. `lab:run` refuses schema
+v1 and `stable_driver_v1`; a new live trial must be regenerated from the
+inspected runtime and current policy.
 
 The WorldTangle gateway reserves each MCP call before execution and enforces the
 manifest's per-turn tool-call limit. Hermes sets the pinned output-token cap,
@@ -271,8 +274,9 @@ fixture-turn, or Hermes sidecar evidence. Raw event-hash invariance for shadow
 sidecar activity remains a separate same-manifest integration gate.
 A zero-turn study is never release-eligible.
 Existing schema-v1 artifacts remain schema-readable: the newer fixture
-counters, authoritative fixture schedule, and per-turn Hermes evidence schedule
-default to empty when absent, so no participation is invented.
+counters, fixture turn schedule, and per-turn Hermes evidence schedule default
+to empty when absent, so no participation is invented. The authoritative
+fixture schedule is required; artifacts without it fail schema parsing.
 Artifacts that predate captured runtime Agent Lab configuration remain
 release-ineligible and now fail artifact verification because their pinned
 cohort and fixture matrix cannot be reconstructed from authenticated evidence.

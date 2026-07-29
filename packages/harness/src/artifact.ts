@@ -56,6 +56,7 @@ import {
   redactSecrets,
   type HermesTurnStats,
 } from "./hermes";
+import { providerEnvironmentNames } from "./provider-environment";
 
 export interface ArtifactRuntimeInput {
   readonly dataDir: string;
@@ -126,14 +127,17 @@ interface ParsedHermesRunEvidence {
   }>[];
 }
 
-function sanitizedRejectedHermesValue(
+export function sanitizedRejectedHermesValue(
   value: unknown,
+  secrets: readonly (string | undefined)[] = [],
   depth = 0,
 ): unknown {
   if (depth >= 6) return "[TRUNCATED]";
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "string") {
-    return redactSecrets(value, []).slice(0, 1_000);
+    return redactSecrets(value, secrets)
+      .replaceAll(/\bbearer\s+[A-Za-z0-9._-]{8,}/gi, "[REDACTED]")
+      .slice(0, 1_000);
   }
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : String(value);
@@ -141,7 +145,7 @@ function sanitizedRejectedHermesValue(
   if (typeof value === "bigint") return value.toString();
   if (Array.isArray(value)) {
     return value.slice(0, 100).map((entry) =>
-      sanitizedRejectedHermesValue(entry, depth + 1)
+      sanitizedRejectedHermesValue(entry, secrets, depth + 1)
     );
   }
   if (typeof value === "object") {
@@ -152,9 +156,10 @@ function sanitizedRejectedHermesValue(
         .slice(0, 100)
         .map((key) => [
           key,
-          /(authorization|api.?key|password|prompt|reasoning|secret|token)/i.test(key)
+          /(authorization|api.?key|bearer|credential|pat|password|prompt|reasoning|secret|session.?key|token)/i
+              .test(key)
             ? "[REDACTED]"
-            : sanitizedRejectedHermesValue(record[key], depth + 1),
+            : sanitizedRejectedHermesValue(record[key], secrets, depth + 1),
         ]),
     );
   }
@@ -164,6 +169,7 @@ function sanitizedRejectedHermesValue(
 function parseHermesRunsForArtifact(
   values: readonly unknown[],
   anomalies: string[],
+  secrets: readonly (string | undefined)[],
 ): ParsedHermesRunEvidence {
   const accepted: HermesTurnStats[] = [];
   const rejected: {
@@ -180,7 +186,7 @@ function parseHermesRunsForArtifact(
       rejected.push({
         index,
         error: detail.slice(0, 900),
-        value: sanitizedRejectedHermesValue(value),
+        value: sanitizedRejectedHermesValue(value, secrets),
       });
     }
   }
@@ -783,6 +789,7 @@ export function writeTrialArtifact(
     const hermesRunEvidence = parseHermesRunsForArtifact(
       input.hermesRuns,
       evidenceAnomalies,
+      providerEnvironmentNames(manifest).map((name) => process.env[name]),
     );
     const hermesRuns = hermesRunEvidence.accepted;
     const score = scorecard(
@@ -1010,11 +1017,18 @@ export function writeTrialArtifact(
   return artifact;
 }
 
-function secretLeak(buffer: Buffer): boolean {
+function secretLeak(
+  buffer: Buffer,
+  secrets: readonly (string | undefined)[] = [],
+): boolean {
   const text = buffer.toString("latin1");
   return /wtpat_[A-Za-z0-9._-]{20,}/.test(text) ||
-    /authorization\s*:\s*bearer\s+[A-Za-z0-9._-]{16,}/i.test(text) ||
-    /\b(?:sk|api)[-_][A-Za-z0-9_-]{24,}\b/i.test(text);
+    /\bbearer\s+[A-Za-z0-9._-]{8,}/i.test(text) ||
+    /x-hermes-session-key["'\s:=]+[A-Za-z0-9._-]{8,}/i.test(text) ||
+    /\b(?:sk|api)[-_][A-Za-z0-9_-]{24,}\b/i.test(text) ||
+    secrets.some((secret) =>
+      secret !== undefined && secret.length >= 8 && text.includes(secret)
+    );
 }
 
 export function verifyTrialArtifact(directory: string): ArtifactVerification {
@@ -1063,6 +1077,20 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
       artifact.manifestDigest
     ) {
       issues.push("manifest digest drift");
+    }
+    const providerSecrets = providerEnvironmentNames(persistedManifest)
+      .map((name) => process.env[name]);
+    for (const path of Object.keys(artifact.files)) {
+      const absolute = join(root, path);
+      const issue = `credential-like material found: ${path}`;
+      if (
+        !issues.includes(issue) &&
+        existsSync(absolute) &&
+        statSync(absolute).isFile() &&
+        secretLeak(readFileSync(absolute), providerSecrets)
+      ) {
+        issues.push(issue);
+      }
     }
   } catch {
     issues.push("manifest.json cannot be parsed canonically");

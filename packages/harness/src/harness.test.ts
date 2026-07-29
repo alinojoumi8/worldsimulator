@@ -28,7 +28,10 @@ import {
   type ExperimentManifest,
   type RunManifestAgentLab,
 } from "@worldtangle/shared";
-import { verifyTrialArtifact } from "./artifact";
+import {
+  sanitizedRejectedHermesValue,
+  verifyTrialArtifact,
+} from "./artifact";
 import { formatCliError, parseArguments } from "./cli";
 import { createPilotManifest } from "./create-manifest";
 import {
@@ -39,6 +42,7 @@ import {
   agentLabToolPins,
   agentLabToolSchemaDigest,
   CITIZEN_TURN_PROMPT,
+  MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK,
 } from "./driver-policy";
 import {
   expectedFixtureMatrixKeys,
@@ -72,6 +76,19 @@ import {
   shadowTurnCircuitBreakerLimit,
 } from "./runner";
 
+const inspectHermesRuntimeMock = vi.hoisted(() => vi.fn(() => Object.freeze({
+  version: "Hermes Agent v0.18.2 (test) · upstream abcdef0",
+  pythonVersion: "3.11.15",
+  openAiSdkVersion: "2.24.0",
+  mcpSdkVersion: "1.26.0",
+  starletteVersion: "1.3.1",
+  aiohttpVersion: "3.14.1",
+})));
+
+vi.mock("./hermes-version", () => ({
+  inspectHermesRuntime: inspectHermesRuntimeMock,
+}));
+
 const roots: string[] = [];
 const budget = {
   maxAgentLoopIterations: 8,
@@ -85,6 +102,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  inspectHermesRuntimeMock.mockClear();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -92,7 +110,7 @@ afterEach(() => {
 
 function manifest() {
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
     studyId: "harness-test",
     scenario: {
@@ -962,6 +980,26 @@ describe("Agent Lab harness", () => {
       "[REDACTED] RE long-secret-value wtpat_x",
       ["RE", "long-secret-value"],
     )).toBe("[REDACTED] RE [REDACTED] [REDACTED]");
+  });
+
+  it("redacts rejected Hermes credentials from keys and free-form values", () => {
+    const providerSecret = "minimax-provider-secret-00000001";
+    const sessionSecret = "hermes-session-secret-00000001";
+    const sanitized = sanitizedRejectedHermesValue({
+      sessionKey: sessionSecret,
+      message:
+        `authorization failed for Bearer bearer-secret-00000001 and ${providerSecret}`,
+      nested: {
+        xHermesSessionKey: sessionSecret,
+        harmless: providerSecret,
+      },
+    }, [providerSecret]);
+    const serialized = canonicalStringify(sanitized);
+
+    expect(serialized).not.toContain(providerSecret);
+    expect(serialized).not.toContain(sessionSecret);
+    expect(serialized).not.toContain("bearer-secret-00000001");
+    expect(serialized.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps expected and observed fixture matrix ordering aligned", () => {
@@ -2711,15 +2749,6 @@ describe("Agent Lab harness", () => {
       inputMicrocentsPerToken: 100,
       outputMicrocentsPerToken: 300,
       providerEnvAllowlist: "MINIMAX_API_KEY",
-      hermesVersionOutput: [
-        "Hermes Agent v0.18.2 (test) · upstream abcdef0",
-        "Install directory: C:\\hermes-agent",
-        "Python: 3.11.15",
-        "OpenAI SDK: 2.24.0",
-        "MCP SDK: 1.26.0",
-        "Starlette: 1.3.1",
-        "aiohttp: 3.14.1",
-      ].join("\n"),
       createdWall: "2026-07-24T12:00:00.000Z",
     });
     expect(validateExperimentManifest(created)).toEqual(created);
@@ -2735,6 +2764,22 @@ describe("Agent Lab harness", () => {
       maxToolCalls: 8,
     });
     expect(created.scenario.budgets.perAgentDailyTokens).toBe(72_000);
+    expect(created.scenario.budgets.runCostCentsMax).toBe("212");
+    const worstCaseTurnMicrocents =
+      created.generationBudget.maxInputTokens * 100 +
+      created.generationBudget.maxOutputTokens * 300;
+    const pinnedTurns =
+      new Set(created.scenario.opportunityFixture?.ticks ?? []).size *
+      created.cohort.size;
+    expect(
+      BigInt(pinnedTurns) * BigInt(worstCaseTurnMicrocents),
+    ).toBeLessThanOrEqual(
+      BigInt(created.scenario.budgets.runCostCentsMax) * 1_000_000n,
+    );
+    expect(created.cohort.size).toBeLessThanOrEqual(
+      MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK,
+    );
+    expect(inspectHermesRuntimeMock).toHaveBeenCalledOnce();
     expect(created.engine.dependencies["node"]).toBe(process.version);
     expect(created.engine.dependencies["pnpm-lock-sha256"]).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -2778,7 +2823,52 @@ describe("Agent Lab harness", () => {
     })).toThrow(/forbidden credential field/);
   });
 
-  it("keeps v1 policy manifests verifiable but refuses v2 live execution", async () => {
+  it("migrates schema-v1 archives without inventing runtime pins", () => {
+    const current = manifest();
+    const legacyScenario = Object.fromEntries(
+      Object.entries(current.scenario).filter(([key]) =>
+        key !== "opportunityFixture"
+      ),
+    );
+    const legacySettings = Object.fromEntries(
+      Object.entries(current.provider.settings).filter(([key]) =>
+        ![
+          "hermesMcpSdkVersion",
+          "hermesStarletteVersion",
+          "hermesAiohttpVersion",
+        ].includes(key)
+      ),
+    );
+    const archivedInput = {
+      ...current,
+      schemaVersion: 1,
+      scenario: legacyScenario,
+      provider: {
+        ...current.provider,
+        settings: legacySettings,
+      },
+      driverPolicyDigest: agentLabLegacyDriverPolicyDigest(budget),
+    };
+
+    expect(() => validateExperimentManifest(archivedInput)).toThrow();
+    const archived = validateArchivedExperimentManifest(archivedInput);
+
+    expect(archived.sourceSchemaVersion).toBe(1);
+    expect(archived.driverPolicyVersion).toBe("stable_driver_v1");
+    expect(archived.manifest).toMatchObject({
+      schemaVersion: 2,
+      provider: {
+        settings: {
+          hermesMcpSdkVersion: "unavailable-in-schema-v1",
+          hermesStarletteVersion: "unavailable-in-schema-v1",
+          hermesAiohttpVersion: "unavailable-in-schema-v1",
+        },
+      },
+    });
+    expect(archived.manifest.scenario.opportunityFixture).toBeUndefined();
+  });
+
+  it("keeps v1 driver-policy archives verifiable but refuses live execution", async () => {
     expect(agentLabLegacyDriverPolicyDigest(budget)).toBe(
       "e7e543df7d3f0c66c26bc0b307238ae845f43aac33f296f25bf69b4efda5fa67",
     );
@@ -2944,6 +3034,24 @@ describe("Agent Lab harness", () => {
 
     expect(verifyTrialArtifact(root).issues).toContain(
       "runtime evidence is invalid: Error: runtime.json is not a JSON object",
+    );
+  });
+
+  it("detects a manifest-allowlisted provider secret in runtime evidence", () => {
+    const providerSecret = "minimax-provider-secret-00000001";
+    vi.stubEnv("MINIMAX_API_KEY", providerSecret);
+    const root = validArtifactDirectory();
+    const runtimePath = join(root, "runtime.json");
+    const runtime = JSON.parse(readFileSync(runtimePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    runtime["providerDiagnostic"] = providerSecret;
+    writeFileSync(runtimePath, `${canonicalStringify(runtime)}\n`, "utf8");
+    refreshArtifactFileHash(root, "runtime.json");
+
+    expect(verifyTrialArtifact(root).issues).toContain(
+      "credential-like material found: runtime.json",
     );
   });
 

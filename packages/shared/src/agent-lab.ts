@@ -552,7 +552,7 @@ export const experimentMetricSchema = z.object({
 }).strict();
 
 export const experimentManifestSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   protocolVersion: z.literal(AGENT_LAB_PROTOCOL_VERSION),
   studyId: z.string().regex(LAB_ID_PATTERN),
   scenario: z.object({

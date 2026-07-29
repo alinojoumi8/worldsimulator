@@ -6,6 +6,7 @@ import {
   AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
   AGENT_LAB_PILOT_FIXTURE_TICKS,
   canonicalStringify,
+  compareCodeUnit,
   eventEnvelopeSchema,
   IdFactory,
   Rng,
@@ -960,7 +961,7 @@ describe("WS-605 prepared Tier-2 decision barrier", () => {
     const expectedGoalId = agentStore.listByAgent(base.agentId)
       .filter((record) => record.goal.status === "dormant")
       .map((record) => record.goal.id)
-      .sort()[0]!;
+      .sort(compareCodeUnit)[0]!;
 
     const opportunity = discoverTier2DecisionOpportunities(
       base.db,
