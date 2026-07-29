@@ -12,7 +12,7 @@ The Phase 12 implementation foundation is present on the Agent Lab feature branc
 - offline replay from recorded causal inputs;
 - isolated Hermes profiles and persistent citizen sessions;
 - manifest, artifact, checksum, taint, vector-scorecard, verification, and report tooling; and
-- focused contract, shadow-invariance, active-action, and offline-replay gates.
+- focused contract, shadow-invariance, external-action, and offline-replay gates.
 
 The real-Hermes, three-seed production pilot has **not** been run by ordinary CI.
 Until that explicit gate succeeds, Phase 12 is not release-complete and no result
@@ -51,6 +51,17 @@ flowchart LR
   use the existing deterministic Tier-1 fallback.
 - Opportunities are prepared and applied in canonical order, independent of
   network completion order.
+- Shadow profiles run concurrently so the matched cohort can meet one shared
+  deadline. The harness waits for every profile task before teardown and
+  aggregates run statistics in credential order. Sidecar call timing preserves
+  what actually happened, but it never orders authoritative work.
+- The pinned `stable_driver_v2` policy allows at most 32 shadow turns per
+  credential in one tick, independently of the per-turn MCP tool budget. A
+  repeated-turn stream beyond that breaker revokes only that credential,
+  expires its open turns, and records a failed Hermes run in the artifact.
+  Transport and credential failures follow the same evidence-preserving path:
+  the native shadow world continues, but the failed trial is not
+  release-eligible.
 
 An accepted external submission emits `agent.external_submission.recorded`.
 The trial is marked externally influenced, and the standard Riverbend baseline
@@ -67,6 +78,7 @@ preserves pre-Phase-12 manifests and hashes. The configuration pins:
 - protocol, study, trial, and experiment-manifest identities;
 - `native`, `shadow`, or `external` mode;
 - explicit assignments or `stable_stratified_v1` selection;
+- an optional byte-pinned laboratory opportunity fixture;
 - decision deadline and generation/tool budgets;
 - driver-policy, prompt-byte, and tool-schema digests; and
 - the resolved assignment list in the immutable run manifest.
@@ -127,9 +139,31 @@ pnpm lab:init -- --out experiments/phase12-pilot.json \
 The generator pins the current commit, Node version, lockfile bytes, exact
 citizen prompt, exact MCP schemas, driver policy, three seeds, 60 ticks, an
 eight-citizen stratified cohort, one native attempt, three shadow attempts, and
-three active attempts per seed. Provider prices are explicit integer
+three external attempts per seed. Provider prices are explicit integer
 microcents-per-token pins; use `0` only for a genuinely free/local provider.
-The generator also inspects and pins the Hermes, Python, and OpenAI SDK versions.
+The production pilot also pins `goal_commitment_choice_v1` at ticks 10, 30, and
+50. At each tick, every matched citizen receives the same bounded choice to
+reaffirm one existing goal or defer. The engine runs the fixture in all three
+arms, including the native control, so shadow comparisons remain matched.
+If a pinned citizen is missing, unable to act, quarantined, or has no eligible
+goal at a fixture tick, only that fixture slot is omitted; unrelated Tier-2
+opportunities still execute. The missing citizen/tick slot makes shadow or
+external turn evidence fail the pinned matrix release gate and makes every arm
+fail the authoritative fixture-event gate.
+Each applied fixture choice emits an authenticated
+`agent.goal.commitment_recorded` event containing its fixture version, offered
+opportunity key, agent, action, and tick. Artifacts reconstruct a canonical
+`authoritativeFixtureSchedule` from those persisted events in all three arms.
+Native artifacts remain free of external turn/receipt sidecars, while their
+24-slot fixture matrix is independently verifiable from the event log.
+The `goal_commitment_choice_v1` fixture is a controlled elicitation and
+measurement instrument; it is not evidence that the decision opportunity
+emerged naturally from Riverbend. For shadow and external arms, real-agent
+participation is established separately by the manifested tool-call trajectory
+and terminal provider token evidence for every scheduled citizen/tick turn;
+native participation is evidenced by authoritative engine records.
+The generator also inspects and pins the Hermes, Python, OpenAI SDK, MCP SDK,
+Starlette, and aiohttp versions.
 `--provider-env` is a comma-separated allowlist of environment-variable names,
 never values. The report computes Hermes cost from the API's terminal token
 usage and the pinned prices.
@@ -160,10 +194,44 @@ variables plus the manifest-allowlisted provider variables; unrelated parent
 secrets do not cross the profile boundary. Credential files are ephemeral and
 excluded from artifacts.
 
+New experiment manifests use schema v2 and pin `stable_driver_v2`, including the
+bounded shadow-turn circuit breaker and the inspected MCP, Starlette, and
+aiohttp versions. The normal manifest loader and release reporter require that
+current schema and digest. The explicitly named archive verifier migrates a
+strict schema-v1 manifest into a verification-only representation, marks its
+three unavailable runtime pins, and recognizes the exact historical
+`stable_driver_v1` digest. This preserves archived artifact verification and
+offline replay without inventing dependency evidence. `lab:run` refuses schema
+v1 and `stable_driver_v1`; a new live trial must be regenerated from the
+inspected runtime and current policy.
+
 The WorldTangle gateway reserves each MCP call before execution and enforces the
 manifest's per-turn tool-call limit. Hermes sets the pinned output-token cap,
 records terminal input/output usage, and enforces per-agent daily and whole-run
-cost ceilings. Preflight exhaustion revokes the credential and immediately
+cost ceilings. Before any network request, the driver synchronously reserves
+the manifest-pinned worst-case tokens and cost; terminal accounting replaces
+that reservation with valid reported usage. A timeout, failed request, or
+terminal response without valid usage charges the pinned worst case instead.
+Immediately after Hermes accepts a run, the driver measures the time remaining
+until the shared decision deadline and reserves at most half of that value,
+capped at one second, for cleanup. Status polling continues until that reserve
+begins. A stop request has a separate cleanup grace window capped at one second,
+so transport cleanup may finish after the action deadline. If the deadline has
+already elapsed, the driver can still use that bounded window to stop the
+accepted provider run and capture usage. Cleanup can only cancel and record
+evidence: the action deadline stays hard, no late decision is accepted, and
+missing usage is charged at the pinned worst case. Terminal poll failures use
+the same bounded stop grace.
+If a 202 response cannot provide a usable run ID, the harness terminates that
+citizen's isolated Hermes profile because the supported stop endpoint cannot
+address the accepted run safely.
+Transient status transport failures and retryable HTTP statuses (408, 425, 429,
+and 5xx) receive at most two retries, each after 100 ms. Unreadable status
+bodies and other protocol failures are terminal on the first occurrence. After
+any terminal poll failure, the driver makes a best-effort stop request and
+records a failed Hermes run charged at the manifest-pinned worst case when
+valid usage is unavailable.
+A denied reservation revokes the credential and immediately
 produces the deterministic fallback; a provider failure or post-call budget
 violation disables that controller for later turns and remains visible in the
 trial evidence.
@@ -179,7 +247,10 @@ Each trial preserves:
 - sanitized turn, submission, receipt, tool-call, and event JSONL;
 - event-log, logical-state, LLM-cache, prompt, and artifact hash heads;
 - file checksums;
-- token, cost, latency, fallback, validity, and tool-call statistics;
+- token, cost, latency, fallback, validity, and tool-call statistics; for
+  shadow/external trials, a fixture-turn schedule joins each Hermes run and
+  tool-call count to its exact turn ID. Native artifacts keep that sidecar
+  schedule empty;
 - vector scorecard, taint record, and Markdown report.
 
 It never exports PATs, provider/API keys, Hermes API keys, or hidden model
@@ -188,7 +259,29 @@ manifest drift, nonterminal turns, failed invariants, replay divergence,
 unauthorized applied actions, budget violations, taint, secret-shaped content,
 or a corrupt database bundle. Manual or unmanifested admin/world-event input
 marks the trial tainted; tainted and invalid trials are excluded from
-comparative summaries.
+comparative summaries. Duplicate, orphaned, cross-linked, or malformed fixture
+evidence is preserved in the raw bundle, adds an `artifact_corrupt` taint
+reason, and remains diagnosable even though the trial cannot pass verification.
+
+The production report additionally fails closed when any trial does not contain
+exactly 24 authenticated fixture events, when a non-native trial does not
+contain exactly 24 scheduled fixture turns and receipts, when any Agent Lab turn
+is nonterminal, when any of the 24 non-native fixture turns lacks a completed
+Hermes run, positive terminal input/output usage, or at least one scoped tool
+call, when a non-native Hermes run fails or violates a budget, or when a shadow trial changes
+the native control's authoritative logical-state hash for the same seed. The
+release gate explicitly rejects any native artifact with turn, receipt, tool,
+fixture-turn, or Hermes sidecar evidence. Raw event-hash invariance for shadow
+sidecar activity remains a separate same-manifest integration gate.
+A zero-turn study is never release-eligible.
+Existing schema-v1 artifacts remain schema-readable: the newer fixture
+counters, fixture turn schedule, authoritative fixture schedule, and per-turn
+Hermes evidence schedule default to empty when absent, so no participation is
+invented. An authoritative fixture entry that does not reference a scheduled
+fixture turn still fails schema parsing.
+Artifacts that predate captured runtime Agent Lab configuration remain
+release-ineligible and now fail artifact verification because their pinned
+cohort and fixture matrix cannot be reconstructed from authenticated evidence.
 
 ## Realism program
 
@@ -215,8 +308,17 @@ The real-Hermes pilot is eligible only when all of the following are true:
 
 - exactly three frozen seeds, 60 ticks, and eight stratified citizens;
 - per seed: one native, three shadow, and three external attempts;
-- every turn has a terminal receipt;
-- all active INV-1–10 checks pass;
+- the pinned three-tick fixture produces exactly 24 authenticated authoritative
+  events in every trial, including native controls;
+- the pinned three-tick goal-commitment fixture produces exactly 24 turns and
+  terminal receipts in every shadow and external trial;
+- every one of the 24 non-native fixture turns records a completed Hermes run,
+  positive terminal input/output tokens, at least one scoped tool call, and zero
+  budget violations, with zero failed Hermes statistics rows outside those 24
+  completed fixture turns. Status-poll retries retain the accepted run identity
+  and cleanup/stop requests do not create additional Hermes run rows;
+- every shadow logical-state hash matches its same-seed native control;
+- all external INV-1–10 checks pass;
 - no unauthorized proposal applies;
 - strict offline replay reports zero divergence;
 - no trial included in comparison is tainted or corrupt; and

@@ -35,7 +35,10 @@ import {
 import { replayRunSchema } from "./replay";
 import { exportJobSchema } from "./export";
 import { digestStreamDataSchema } from "./event-stream";
-import { agentLabScenarioSchema } from "./agent-lab";
+import {
+  agentLabFixtureTicksWithinBound,
+  agentLabScenarioSchema,
+} from "./agent-lab";
 
 const positiveIntegerQuery = z.coerce.number().int().positive().safe();
 const nonnegativeIntegerQuery = z.coerce.number().int().nonnegative().safe();
@@ -81,7 +84,19 @@ export const createSimulationRequestSchema = z
         endTick: z.number().int().positive().safe(),
         agentLab: agentLabScenarioSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((scenario, ctx) => {
+        if (!agentLabFixtureTicksWithinBound(
+          scenario.agentLab?.opportunityFixture,
+          scenario.endTick,
+        )) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["agentLab", "opportunityFixture", "ticks"],
+            message: "every opportunity fixture tick must occur on or before the run end",
+          });
+        }
+      }),
   })
   .strict();
 export type CreateSimulationRequest = z.infer<typeof createSimulationRequestSchema>;

@@ -10,20 +10,29 @@ import {
 import { gunzipSync, gzipSync } from "node:zlib";
 import { basename, join, relative, resolve } from "node:path";
 import {
+  AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX,
+  AGENT_LAB_TAINT_REASON_LIMIT,
   agentActionReceiptSchema,
+  agentIdSchema,
   agentTurnEnvelopeSchema,
   canonicalParse,
   canonicalStringify,
+  compareCodeUnit,
+  eventEnvelopeSchema,
   experimentScorecardSchema,
+  isAgentLabTerminalReceiptStatus,
+  runManifestAgentLabSchema,
   sha256Hex,
   taintRecordSchema,
   trialArtifactSchema,
   type ExperimentManifest,
   type ExperimentScorecard,
   type ReplayRun,
+  type RunManifestAgentLab,
   type TrialArtifact,
 } from "@worldtangle/shared";
 import { checkInvariants } from "@worldtangle/engine";
+import { z } from "zod";
 import {
   computeLogicalStateHash,
   openWorldDatabase,
@@ -34,8 +43,20 @@ import {
   worldDatabasePath,
 } from "../../../apps/server/src/persistence";
 import { readRunInvariantSnapshot } from "../../../apps/server/src/testing/run-invariant-probe";
-import type { TrialPlan } from "./manifest";
-import type { HermesTurnStats } from "./hermes";
+import {
+  expectedFixtureMatrixKeys,
+  observedFixtureMatrixKeys,
+} from "./fixture-matrix";
+import {
+  validateArchivedExperimentManifest,
+  type TrialPlan,
+} from "./manifest";
+import {
+  hermesTurnStatsSchema,
+  redactSecrets,
+  type HermesTurnStats,
+} from "./hermes";
+import { providerEnvironmentNames } from "./provider-environment";
 
 export interface ArtifactRuntimeInput {
   readonly dataDir: string;
@@ -76,6 +97,376 @@ function parseJsonl(path: string): unknown[] {
     : text.split(/\r?\n/).map((line) => canonicalParse(line));
 }
 
+function parseHermesTurnStatsEvidence(
+  value: unknown,
+  index: number,
+): HermesTurnStats {
+  const parsed = hermesTurnStatsSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const location = issue?.path.length === 0
+      ? ""
+      : ` at ${issue?.path.join(".")}`;
+    throw new Error(
+      `Hermes run ${index} evidence is invalid${location}: ` +
+        (issue?.message ?? "schema validation failed"),
+    );
+  }
+  return Object.freeze({
+    ...parsed.data,
+    budgetViolations: Object.freeze([...parsed.data.budgetViolations]),
+  });
+}
+
+export interface ParsedHermesRunEvidence {
+  readonly accepted: readonly HermesTurnStats[];
+  readonly rejected: readonly Readonly<{
+    index: number;
+    error: string;
+    value: unknown;
+  }>[];
+}
+
+function sanitizedRejectedHermesText(
+  value: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  return redactSecrets(value, secrets)
+    .replaceAll(/\bbearer\s+[A-Za-z0-9._-]{8,}/gi, "[REDACTED]")
+    .slice(0, 1_000);
+}
+
+export function sanitizedRejectedHermesValue(
+  value: unknown,
+  secrets: readonly (string | undefined)[] = [],
+  depth = 0,
+): unknown {
+  if (depth >= 6) return "[TRUNCATED]";
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return sanitizedRejectedHermesText(value, secrets);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((entry) =>
+      sanitizedRejectedHermesValue(entry, secrets, depth + 1)
+    );
+  }
+  if (typeof value === "object") {
+    const record = value as Readonly<Record<string, unknown>>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort(compareCodeUnit)
+        .slice(0, 100)
+        .map((key, index) => {
+          const sanitizedKey = sanitizedRejectedHermesText(key, secrets);
+          return [
+            sanitizedKey === key ? key : `[REDACTED_KEY_${index}]`,
+            /(authorization|api.?key|bearer|credential|pat|password|prompt|reasoning|secret|session.?key|token)/i
+                .test(key)
+              ? "[REDACTED]"
+              : sanitizedRejectedHermesValue(record[key], secrets, depth + 1),
+          ];
+        }),
+    );
+  }
+  return `[${typeof value}]`;
+}
+
+export function parseHermesRunsForArtifact(
+  values: readonly unknown[],
+  anomalies: string[],
+  secrets: readonly (string | undefined)[],
+): ParsedHermesRunEvidence {
+  const accepted: HermesTurnStats[] = [];
+  const rejected: {
+    index: number;
+    error: string;
+    value: unknown;
+  }[] = [];
+  for (const [index, value] of values.entries()) {
+    try {
+      accepted.push(parseHermesTurnStatsEvidence(value, index));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const sanitizedDetail = sanitizedRejectedHermesText(detail, secrets)
+        .slice(0, 900);
+      anomalies.push(`Hermes runtime evidence: ${sanitizedDetail}`.slice(0, 900));
+      rejected.push({
+        index,
+        error: sanitizedDetail,
+        value: sanitizedRejectedHermesValue(value, secrets),
+      });
+    }
+  }
+  return Object.freeze({
+    accepted: Object.freeze(accepted),
+    rejected: Object.freeze(rejected.map((entry) => Object.freeze(entry))),
+  });
+}
+
+function parseToolCallEvidence(
+  path: string,
+): readonly { readonly turnId: string | null; readonly agentId: string }[] {
+  const identitySchema = z.strictObject({
+    turnId: agentTurnEnvelopeSchema.shape.turnId.nullable(),
+    agentId: agentIdSchema,
+  });
+  return parseJsonl(path).map((row, index) => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new Error(`tool call ${index} evidence is not an object`);
+    }
+    const record = row as Readonly<Record<string, unknown>>;
+    const parsed = identitySchema.safeParse({
+      turnId: record["turnId"],
+      agentId: record["agentId"],
+    });
+    if (!parsed.success) {
+      const field = parsed.error.issues[0]?.path[0];
+      if (field === "turnId" || field === "agentId") {
+        throw new Error(`tool call ${index} ${field} is invalid`);
+      }
+      throw new Error(`tool call ${index} identity is invalid`);
+    }
+    return Object.freeze(parsed.data);
+  });
+}
+
+function fixtureScheduleFor(
+  turns: readonly ReturnType<typeof agentTurnEnvelopeSchema.parse>[],
+  receipts: readonly ReturnType<typeof agentActionReceiptSchema.parse>[],
+): TrialArtifact["statistics"]["fixtureSchedule"] {
+  const seenTurnIds = new Set<string>();
+  for (const turn of turns) {
+    if (seenTurnIds.has(turn.turnId)) {
+      throw new Error(`duplicate turn envelope: ${turn.turnId}`);
+    }
+    seenTurnIds.add(turn.turnId);
+  }
+  const orphanReceiptTurnIds = [...new Set(
+    receipts
+      .filter((receipt) => !seenTurnIds.has(receipt.turnId))
+      .map((receipt) => receipt.turnId),
+  )].sort(compareCodeUnit);
+  if (orphanReceiptTurnIds.length > 0) {
+    throw new Error(
+      `receipt references an unknown turn: ${orphanReceiptTurnIds.join(", ")}`,
+    );
+  }
+  const statusesByTurn = new Map<
+    string,
+    Array<ReturnType<typeof agentActionReceiptSchema.parse>["status"]>
+  >();
+  for (const receipt of receipts) {
+    const statuses = statusesByTurn.get(receipt.turnId) ?? [];
+    statuses.push(receipt.status);
+    statusesByTurn.set(receipt.turnId, statuses);
+  }
+  const receiptViolations: string[] = [];
+  const receiptByTurn = new Map(
+    [...statusesByTurn]
+      .sort(([leftTurnId], [rightTurnId]) =>
+        compareCodeUnit(leftTurnId, rightTurnId)
+      )
+      .map(([turnId, statuses]) => {
+        const terminalStatuses = statuses
+          .filter(isAgentLabTerminalReceiptStatus)
+          .sort(compareCodeUnit);
+        const distinctTerminalStatuses = [...new Set(terminalStatuses)];
+        if (
+          terminalStatuses.length > 1 &&
+          distinctTerminalStatuses.length === 1
+        ) {
+          receiptViolations.push(
+            `turn ${turnId} has duplicate terminal receipts: ` +
+              terminalStatuses.join(", "),
+          );
+        } else if (distinctTerminalStatuses.length > 1) {
+          receiptViolations.push(
+            `turn ${turnId} has conflicting terminal receipts: ` +
+              distinctTerminalStatuses.join(", "),
+          );
+        }
+        return [turnId, distinctTerminalStatuses[0] ?? null] as const;
+      }),
+  );
+  if (receiptViolations.length > 0) {
+    throw new Error(receiptViolations.sort(compareCodeUnit).join("; "));
+  }
+  return turns
+    .filter((turn) => turn.opportunityKey.startsWith(
+      AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX,
+    ))
+    .map((turn) => ({
+      agentId: turn.agentId,
+      targetTick: turn.targetTick,
+      turnId: turn.turnId,
+      receiptStatus: receiptByTurn.get(turn.turnId) ?? null,
+    }))
+    .sort((left, right) => (
+      left.targetTick - right.targetTick ||
+      compareCodeUnit(left.agentId, right.agentId) ||
+      compareCodeUnit(left.turnId, right.turnId)
+    ));
+}
+
+function authoritativeFixtureScheduleFor(
+  events: readonly ReturnType<typeof eventEnvelopeSchema.parse>[],
+  expectedFixtureVersion: string | undefined,
+): TrialArtifact["statistics"]["authoritativeFixtureSchedule"] {
+  if (expectedFixtureVersion === undefined) return [];
+  return events
+    .filter((event) => event.type === "agent.goal.commitment_recorded")
+    .map((event) => {
+      if (
+        typeof event.payload !== "object" ||
+        event.payload === null ||
+        Array.isArray(event.payload)
+      ) {
+        throw new Error(`fixture event ${event.eventId} has a malformed payload`);
+      }
+      const payload = event.payload as Readonly<Record<string, unknown>>;
+      const agentId = payload["agentId"];
+      const fixtureVersion = payload["fixtureVersion"];
+      const actionType = payload["actionType"];
+      const opportunityKey = payload["opportunityKey"];
+      if (
+        typeof agentId !== "string" ||
+        event.actor.kind !== "agent" ||
+        event.actor.id !== agentId ||
+        fixtureVersion !== expectedFixtureVersion ||
+        typeof opportunityKey !== "string" ||
+        !opportunityKey.startsWith(AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX)
+      ) {
+        throw new Error(
+          `fixture event ${event.eventId} is not pinned to an authenticated slot`,
+        );
+      }
+      if (
+        actionType !== "agent.reaffirm_goal" &&
+        actionType !== "agent.defer_goal"
+      ) {
+        throw new Error(
+          `fixture event ${event.eventId} has an unrecognized action type`,
+        );
+      }
+      const authenticatedActionType:
+        | "agent.reaffirm_goal"
+        | "agent.defer_goal" = actionType;
+      return {
+        agentId,
+        targetTick: event.tick,
+        eventId: event.eventId,
+        actionType: authenticatedActionType,
+        opportunityKey,
+      };
+    })
+    .sort((left, right) => (
+      left.targetTick - right.targetTick ||
+      compareCodeUnit(left.agentId, right.agentId) ||
+      compareCodeUnit(left.eventId, right.eventId)
+    ));
+}
+
+function fixtureHermesEvidenceFor(
+  turns: readonly ReturnType<typeof agentTurnEnvelopeSchema.parse>[],
+  hermesRuns: readonly HermesTurnStats[],
+  toolCalls: readonly {
+    readonly turnId: string | null;
+    readonly agentId: string;
+  }[],
+): TrialArtifact["statistics"]["fixtureHermesEvidenceSchedule"] {
+  const turnsById = new Map(turns.map((turn) => [turn.turnId, turn]));
+  const runsByTurnId = new Map<string, HermesTurnStats>();
+  for (const run of hermesRuns) {
+    if (run.turnId === undefined) continue;
+    const turn = turnsById.get(run.turnId);
+    if (turn === undefined) {
+      throw new Error(`Hermes evidence references an unknown turn: ${run.turnId}`);
+    }
+    if (runsByTurnId.has(run.turnId)) {
+      throw new Error(`duplicate Hermes evidence for turn: ${run.turnId}`);
+    }
+    if (
+      run.opportunityKey !== turn.opportunityKey ||
+      run.agentId !== turn.agentId ||
+      run.targetTick !== turn.targetTick
+    ) {
+      throw new Error(`Hermes evidence does not match turn: ${run.turnId}`);
+    }
+    runsByTurnId.set(run.turnId, run);
+  }
+  const toolCallsByTurnId = new Map<string, number>();
+  for (const toolCall of toolCalls) {
+    if (toolCall.turnId === null) continue;
+    const turn = turnsById.get(toolCall.turnId);
+    if (turn === undefined) {
+      throw new Error(
+        `tool-call evidence references an unknown turn: ${toolCall.turnId}`,
+      );
+    }
+    if (turn.agentId !== toolCall.agentId) {
+      throw new Error(
+        `tool-call evidence does not match turn: ${toolCall.turnId}`,
+      );
+    }
+    toolCallsByTurnId.set(
+      toolCall.turnId,
+      (toolCallsByTurnId.get(toolCall.turnId) ?? 0) + 1,
+    );
+  }
+  return turns
+    .filter((turn) => turn.opportunityKey.startsWith(
+      AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX,
+    ))
+    .flatMap((turn) => {
+      const run = runsByTurnId.get(turn.turnId);
+      return run === undefined
+        ? []
+        : [{
+            agentId: turn.agentId,
+            targetTick: turn.targetTick,
+            turnId: turn.turnId,
+            hermesRunId: run.runId,
+            status: run.status,
+            inputTokens: run.inputTokens,
+            outputTokens: run.outputTokens,
+            toolCalls: toolCallsByTurnId.get(turn.turnId) ?? 0,
+            budgetViolationCount: run.budgetViolations.length,
+          }];
+    })
+    .sort((left, right) => (
+      left.targetTick - right.targetTick ||
+      compareCodeUnit(left.agentId, right.agentId) ||
+      compareCodeUnit(left.turnId, right.turnId)
+    ));
+}
+
+function assertDerivedFixtureEvidence(
+  cohortAgentIds: readonly string[],
+  schedules: readonly (readonly {
+    readonly agentId: string;
+    readonly targetTick: number;
+  }[])[],
+): void {
+  const cohort = new Set(cohortAgentIds);
+  for (const schedule of schedules) {
+    const keys = observedFixtureMatrixKeys(schedule);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("fixture schedule contains a duplicate agent/tick slot");
+    }
+    const outsideCohort = schedule.find((entry) => !cohort.has(entry.agentId));
+    if (outsideCohort !== undefined) {
+      throw new Error(
+        `fixture schedule agent ${outsideCohort.agentId} is outside the recorded cohort`,
+      );
+    }
+  }
+}
+
 function lastIndicator(
   db: ReturnType<typeof openWorldDatabase>,
   runId: string,
@@ -101,7 +492,9 @@ function scorecard(
   db: ReturnType<typeof openWorldDatabase>,
 ): ExperimentScorecard {
   const invariants = checkInvariants(readRunInvariantSnapshot(db, input.runId));
-  const terminal = rows.receipts.filter((receipt) => receipt.status !== "queued");
+  const terminal = rows.receipts.filter((receipt) =>
+    isAgentLabTerminalReceiptStatus(receipt.status)
+  );
   const accepted = terminal.filter((receipt) =>
     receipt.status === "applied" || receipt.status === "shadowed"
   ).length;
@@ -360,6 +753,35 @@ function collectFiles(root: string): string[] {
   return files.sort();
 }
 
+function captureArtifactEvidence<T>(
+  label: string,
+  anomalies: string[],
+  collect: () => T,
+  fallback: T,
+): T {
+  try {
+    return collect();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    anomalies.push(`${label}: ${detail}`.slice(0, 900));
+    return fallback;
+  }
+}
+
+function captureVerificationEvidence<T>(
+  label: string,
+  issues: string[],
+  collect: () => T,
+): T | undefined {
+  try {
+    return collect();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    issues.push(`${label} is invalid: ${detail}`);
+    return undefined;
+  }
+}
+
 export function writeTrialArtifact(
   manifest: ExperimentManifest,
   plan: TrialPlan,
@@ -375,12 +797,25 @@ export function writeTrialArtifact(
     const events = new SqliteEventStore(db, input.runId);
     const llm = new SqliteLlmCallStore(db, input.runId).summary();
     const cache = new SqliteLlmResponseCache(db, input.runId).exportArtifact();
-    const score = scorecard(manifest, plan, input, rows, db);
-    const hermesInputTokens = input.hermesRuns.reduce(
+    const evidenceAnomalies: string[] = [];
+    const hermesRunEvidence = parseHermesRunsForArtifact(
+      input.hermesRuns,
+      evidenceAnomalies,
+      providerEnvironmentNames(manifest).map((name) => process.env[name]),
+    );
+    const hermesRuns = hermesRunEvidence.accepted;
+    const score = scorecard(
+      manifest,
+      plan,
+      { ...input, hermesRuns },
+      rows,
+      db,
+    );
+    const hermesInputTokens = hermesRuns.reduce(
       (sum, run) => sum + run.inputTokens,
       0,
     );
-    const hermesOutputTokens = input.hermesRuns.reduce(
+    const hermesOutputTokens = hermesRuns.reduce(
       (sum, run) => sum + run.outputTokens,
       0,
     );
@@ -389,9 +824,114 @@ export function writeTrialArtifact(
         BigInt(Number(manifest.provider.settings["inputMicrocentsPerToken"])) +
       BigInt(hermesOutputTokens) *
         BigInt(Number(manifest.provider.settings["outputMicrocentsPerToken"]));
+    const agentLabConfig = captureArtifactEvidence<RunManifestAgentLab | null>(
+      "Agent Lab config evidence",
+      evidenceAnomalies,
+      () => store.config(),
+      null,
+    );
+    let cohortAgentIds = (agentLabConfig?.resolvedAssignments ?? [])
+      .map((assignment) => assignment.agentId)
+      .sort(compareCodeUnit);
+    const persistedEvents = events.list();
+    let fixtureSchedule = captureArtifactEvidence(
+      "fixture turn and receipt evidence",
+      evidenceAnomalies,
+      () => fixtureScheduleFor(rows.turns, rows.receipts),
+      [],
+    );
+    let authoritativeFixtureSchedule = captureArtifactEvidence(
+      "authoritative fixture event evidence",
+      evidenceAnomalies,
+      () => authoritativeFixtureScheduleFor(
+        persistedEvents,
+        manifest.scenario.opportunityFixture?.version,
+      ),
+      [],
+    );
+    let fixtureHermesEvidenceSchedule = captureArtifactEvidence(
+      "fixture Hermes evidence",
+      evidenceAnomalies,
+      () => fixtureHermesEvidenceFor(
+        rows.turns,
+        hermesRuns,
+        rows.toolCalls,
+      ),
+      [],
+    );
+    const derivedFixtureEvidenceIsValid = captureArtifactEvidence(
+      "derived fixture statistics",
+      evidenceAnomalies,
+      () => {
+        assertDerivedFixtureEvidence(cohortAgentIds, [
+          fixtureSchedule,
+          authoritativeFixtureSchedule,
+          fixtureHermesEvidenceSchedule,
+        ]);
+        return true;
+      },
+      false,
+    );
+    if (!derivedFixtureEvidenceIsValid) {
+      cohortAgentIds = [];
+      fixtureSchedule = [];
+      authoritativeFixtureSchedule = [];
+      fixtureHermesEvidenceSchedule = [];
+    }
+    const artifactCorruptionReason = evidenceAnomalies.length === 0
+      ? []
+      : [{
+          code: "artifact_corrupt" as const,
+          detail: evidenceAnomalies.join("; ").slice(0, 1_000),
+          recordedWall: input.completedWall,
+        }];
+    const reasonSlotsBeforeOmissionMarker =
+      AGENT_LAB_TAINT_REASON_LIMIT - artifactCorruptionReason.length;
+    const needsOmissionMarker =
+      rows.taint.reasons.length > reasonSlotsBeforeOmissionMarker;
+    const retainedReasonLimit = Math.max(
+      0,
+      reasonSlotsBeforeOmissionMarker - (needsOmissionMarker ? 1 : 0),
+    );
+    const retainedTaintReasons = rows.taint.reasons.slice(
+      0,
+      retainedReasonLimit,
+    );
+    const omittedReasonCount =
+      rows.taint.reasons.length - retainedTaintReasons.length;
+    const omissionReason = omittedReasonCount === 0
+      ? []
+      : [{
+          code: "artifact_corrupt" as const,
+          detail:
+            `${omittedReasonCount} later taint reason(s) were omitted to preserve ` +
+            `the ${AGENT_LAB_TAINT_REASON_LIMIT}-reason artifact limit`,
+          recordedWall: input.completedWall,
+        }];
+    const artifactTaint = taintRecordSchema.parse({
+      tainted:
+        rows.taint.tainted ||
+        evidenceAnomalies.length > 0 ||
+        omittedReasonCount > 0,
+      reasons: [
+        ...retainedTaintReasons,
+        ...omissionReason,
+        ...artifactCorruptionReason,
+      ],
+    });
     const statistics = {
       turns: rows.turns.length,
-      terminalReceipts: rows.receipts.filter((receipt) => receipt.status !== "queued").length,
+      terminalReceipts: rows.receipts.filter((receipt) =>
+        isAgentLabTerminalReceiptStatus(receipt.status)
+      ).length,
+      fixtureTurns: fixtureSchedule.length,
+      fixtureTerminalReceipts: fixtureSchedule.filter((entry) => (
+        isAgentLabTerminalReceiptStatus(entry.receiptStatus)
+      )).length,
+      cohortAgentIds,
+      fixtureSchedule,
+      authoritativeFixtureSchedule,
+      fixtureHermesEvidenceSchedule,
       validSubmissions: rows.receipts.filter((receipt) =>
         receipt.status === "applied" || receipt.status === "shadowed"
       ).length,
@@ -403,7 +943,7 @@ export function writeTrialArtifact(
       inputTokens: llm.inputTokens + hermesInputTokens,
       outputTokens: llm.outputTokens + hermesOutputTokens,
       costMicrocents: (BigInt(llm.costMicrocents) + hermesCostMicrocents).toString(),
-      latencyMs: input.hermesRuns.reduce((sum, run) => sum + run.latencyMs, 0),
+      latencyMs: hermesRuns.reduce((sum, run) => sum + run.latencyMs, 0),
     };
     const artifactBase = {
       schemaVersion: 1 as const,
@@ -421,7 +961,7 @@ export function writeTrialArtifact(
         completedWall: input.completedWall,
       },
       statistics,
-      taint: rows.taint,
+      taint: artifactTaint,
     };
     writeCanonicalJson(join(input.artifactDirectory, "manifest.json"), manifest);
     writeCanonicalJson(join(input.artifactDirectory, "runtime.json"), {
@@ -430,7 +970,9 @@ export function writeTrialArtifact(
       replay: input.replay,
       lockfileDigest: input.lockfileDigest,
       externallyInfluenced: rows.externallyInfluenced,
-      hermesRuns: input.hermesRuns,
+      agentLabConfig,
+      hermesRuns,
+      hermesRunsRejected: hermesRunEvidence.rejected,
     });
     writeJsonl(join(input.artifactDirectory, "agent-lab-turns.jsonl"), rows.turns);
     writeJsonl(
@@ -445,9 +987,9 @@ export function writeTrialArtifact(
       join(input.artifactDirectory, "agent-lab-tool-calls.jsonl"),
       rows.toolCalls,
     );
-    writeJsonl(join(input.artifactDirectory, "events.jsonl"), events.list());
+    writeJsonl(join(input.artifactDirectory, "events.jsonl"), persistedEvents);
     writeCanonicalJson(join(input.artifactDirectory, "scorecard.json"), score);
-    writeCanonicalJson(join(input.artifactDirectory, "taint.json"), rows.taint);
+    writeCanonicalJson(join(input.artifactDirectory, "taint.json"), artifactTaint);
     writeCanonicalJson(join(input.artifactDirectory, "replay.json"), input.replay);
     db.pragma("wal_checkpoint(TRUNCATE)");
     const databasePath = worldDatabasePath(
@@ -487,17 +1029,28 @@ export function writeTrialArtifact(
   return artifact;
 }
 
-function secretLeak(buffer: Buffer): boolean {
+function secretLeak(
+  buffer: Buffer,
+  secrets: readonly (string | undefined)[] = [],
+): boolean {
   const text = buffer.toString("latin1");
   return /wtpat_[A-Za-z0-9._-]{20,}/.test(text) ||
-    /authorization\s*:\s*bearer\s+[A-Za-z0-9._-]{16,}/i.test(text) ||
-    /\b(?:sk|api)[-_][A-Za-z0-9_-]{24,}\b/i.test(text);
+    /\bbearer\s+[A-Za-z0-9._-]{8,}/i.test(text) ||
+    /x-hermes-session-key["'\s:=]+[A-Za-z0-9._-]{8,}/i.test(text) ||
+    /\b(?:sk|api)[-_][A-Za-z0-9_-]{24,}\b/i.test(text) ||
+    secrets.some((secret) =>
+      secret !== undefined && secret.length >= 8 && text.includes(secret)
+    );
 }
 
 export function verifyTrialArtifact(directory: string): ArtifactVerification {
   const root = resolve(directory);
   const issues: string[] = [];
   let artifact: TrialArtifact | undefined;
+  let persistedManifest: ExperimentManifest | undefined;
+  let runtimeConfig: RunManifestAgentLab | undefined;
+  let runtimeHermesRuns: readonly HermesTurnStats[] | undefined;
+  let runtimeBudgetViolationCount: number | undefined;
   try {
     artifact = trialArtifactSchema.parse(
       canonicalParse(readFileSync(join(root, "artifact.json"), "utf8")),
@@ -527,9 +1080,29 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
     issues.push("artifact hash-chain head does not match the file manifest");
   }
   try {
-    const manifest = canonicalParse(readFileSync(join(root, "manifest.json"), "utf8"));
-    if (sha256Hex(canonicalStringify(manifest)) !== artifact.manifestDigest) {
+    const rawManifest = canonicalParse(
+      readFileSync(join(root, "manifest.json"), "utf8"),
+    );
+    persistedManifest = validateArchivedExperimentManifest(rawManifest).manifest;
+    if (
+      sha256Hex(canonicalStringify(rawManifest)) !==
+      artifact.manifestDigest
+    ) {
       issues.push("manifest digest drift");
+    }
+    const providerSecrets = providerEnvironmentNames(persistedManifest)
+      .map((name) => process.env[name]);
+    for (const path of Object.keys(artifact.files)) {
+      const absolute = join(root, path);
+      const issue = `credential-like material found: ${path}`;
+      if (
+        !issues.includes(issue) &&
+        existsSync(absolute) &&
+        statSync(absolute).isFile() &&
+        secretLeak(readFileSync(absolute), providerSecrets)
+      ) {
+        issues.push(issue);
+      }
     }
   } catch {
     issues.push("manifest.json cannot be parsed canonically");
@@ -540,22 +1113,276 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
     issues.push("compressed run database is corrupt");
   }
   try {
-    const turns = parseJsonl(join(root, "agent-lab-turns.jsonl"))
-      .map((row) => agentTurnEnvelopeSchema.parse(row));
-    const receipts = parseJsonl(join(root, "agent-lab-receipts.jsonl"))
-      .map((row) => agentActionReceiptSchema.parse(row));
-    const terminalTurnIds = new Set(
-      receipts.filter((receipt) => receipt.status !== "queued").map((receipt) => receipt.turnId),
+    const runtimeValue = canonicalParse(
+      readFileSync(join(root, "runtime.json"), "utf8"),
     );
-    for (const turn of turns) {
-      if (!terminalTurnIds.has(turn.turnId)) {
-        issues.push(`turn has no terminal receipt: ${turn.turnId}`);
+    if (
+      typeof runtimeValue !== "object" ||
+      runtimeValue === null ||
+      Array.isArray(runtimeValue)
+    ) {
+      throw new Error("runtime.json is not a JSON object");
+    }
+    const runtime = runtimeValue as Readonly<Record<string, unknown>>;
+    if (!Object.hasOwn(runtime, "agentLabConfig")) {
+      issues.push("runtime evidence is missing agentLabConfig");
+    } else {
+      const parsedConfig = runManifestAgentLabSchema.safeParse(
+        runtime["agentLabConfig"],
+      );
+      if (parsedConfig.success) {
+        runtimeConfig = parsedConfig.data;
+      } else {
+        issues.push(
+          `runtime Agent Lab config is invalid: ${parsedConfig.error.message}`,
+        );
+      }
+    }
+    if (
+      runtimeConfig !== undefined &&
+      (
+        runtimeConfig.studyId !== artifact.studyId ||
+        runtimeConfig.trialId !== artifact.trialId ||
+        runtimeConfig.mode !== artifact.mode ||
+        runtimeConfig.experimentManifestDigest !== artifact.manifestDigest
+      )
+    ) {
+      issues.push("runtime Agent Lab config does not match artifact identity");
+    }
+    if (
+      runtimeConfig !== undefined &&
+      persistedManifest !== undefined &&
+      canonicalStringify(runtimeConfig.opportunityFixture ?? null) !==
+      canonicalStringify(persistedManifest.scenario.opportunityFixture ?? null)
+    ) {
+      issues.push("runtime Agent Lab fixture does not match the pinned manifest");
+    }
+    const runs = runtime["hermesRuns"];
+    if (!Array.isArray(runs)) {
+      issues.push("runtime Hermes runs is not an array");
+    } else {
+      const parsedRuns: HermesTurnStats[] = [];
+      let allRunsValid = true;
+      for (const [index, run] of runs.entries()) {
+        if (typeof run !== "object" || run === null) {
+          issues.push(`Hermes run ${index} evidence is not an object`);
+          allRunsValid = false;
+          continue;
+        }
+        const violations = (run as Readonly<Record<string, unknown>>)[
+          "budgetViolations"
+        ];
+        if (!Array.isArray(violations)) {
+          issues.push(`Hermes run ${index} budgetViolations is not an array`);
+          allRunsValid = false;
+          continue;
+        }
+        try {
+          parsedRuns.push(parseHermesTurnStatsEvidence(run, index));
+        } catch (error) {
+          allRunsValid = false;
+          issues.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (allRunsValid) {
+        runtimeHermesRuns = Object.freeze(parsedRuns);
+        runtimeBudgetViolationCount = parsedRuns.reduce(
+          (sum, run) => sum + run.budgetViolations.length,
+          0,
+        );
+      }
+    }
+    const rejectedRuns = runtime["hermesRunsRejected"];
+    if (rejectedRuns !== undefined) {
+      if (!Array.isArray(rejectedRuns)) {
+        issues.push("runtime rejected Hermes runs is not an array");
+      } else if (rejectedRuns.length > 0) {
+        issues.push(
+          `${rejectedRuns.length} rejected Hermes runtime evidence row(s) were preserved`,
+        );
       }
     }
   } catch (error) {
+    issues.push(`runtime evidence is invalid: ${String(error)}`);
+  }
+  const turns = captureVerificationEvidence(
+    "turn evidence",
+    issues,
+    () => parseJsonl(join(root, "agent-lab-turns.jsonl"))
+      .map((row) => agentTurnEnvelopeSchema.parse(row)),
+  );
+  const receipts = captureVerificationEvidence(
+    "receipt evidence",
+    issues,
+    () => parseJsonl(join(root, "agent-lab-receipts.jsonl"))
+      .map((row) => agentActionReceiptSchema.parse(row)),
+  );
+  const persistedEvents = captureVerificationEvidence(
+    "event evidence",
+    issues,
+    () => parseJsonl(join(root, "events.jsonl"))
+      .map((row) => eventEnvelopeSchema.parse(row)),
+  );
+  const toolCalls = captureVerificationEvidence(
+    "tool-call evidence",
+    issues,
+    () => parseToolCallEvidence(join(root, "agent-lab-tool-calls.jsonl")),
+  );
+  const resolvedCohort = runtimeConfig?.resolvedAssignments
+    .map((assignment) => assignment.agentId)
+    .sort(compareCodeUnit);
+  const uniqueFixtureTicks = persistedManifest === undefined
+    ? undefined
+    : [...new Set(persistedManifest.scenario.opportunityFixture?.ticks ?? [])];
+  if (persistedManifest !== undefined && runtimeConfig === undefined) {
     issues.push(
-      `turn or receipt evidence is invalid: ${error instanceof Error ? error.message : error}`,
+      "fixture matrix was not verified because runtime Agent Lab config is unavailable",
     );
+  }
+  if (turns !== undefined && artifact.statistics.turns !== turns.length) {
+    issues.push("artifact turn count does not match turn evidence");
+  }
+  if (receipts !== undefined) {
+    const terminalReceipts = receipts.filter(
+      (receipt) => isAgentLabTerminalReceiptStatus(receipt.status),
+    ).length;
+    if (artifact.statistics.terminalReceipts !== terminalReceipts) {
+      issues.push("artifact terminal receipt count does not match receipt evidence");
+    }
+  }
+  if (
+    resolvedCohort !== undefined &&
+    canonicalStringify(artifact.statistics.cohortAgentIds) !==
+      canonicalStringify(resolvedCohort)
+  ) {
+    issues.push("artifact cohort does not match runtime Agent Lab config");
+  }
+  if (turns !== undefined && receipts !== undefined) {
+    const terminalTurnIds = new Set(
+      receipts
+        .filter((receipt) => isAgentLabTerminalReceiptStatus(receipt.status))
+        .map((receipt) => receipt.turnId),
+    );
+    const nonTerminalTurnIds = turns
+      .filter((turn) => !terminalTurnIds.has(turn.turnId))
+      .map((turn) => turn.turnId)
+      .sort(compareCodeUnit);
+    if (nonTerminalTurnIds.length > 0) {
+      issues.push(
+        `${nonTerminalTurnIds.length} turn(s) have no terminal receipt: ` +
+          nonTerminalTurnIds.slice(0, 10).join(", "),
+      );
+    }
+    const observedSchedule = captureVerificationEvidence(
+      "fixture turn and receipt evidence",
+      issues,
+      () => fixtureScheduleFor(turns, receipts),
+    );
+    if (observedSchedule !== undefined) {
+      const fixtureTerminalReceipts = observedSchedule.filter((entry) => (
+        isAgentLabTerminalReceiptStatus(entry.receiptStatus)
+      )).length;
+      if (artifact.statistics.fixtureTurns !== observedSchedule.length) {
+        issues.push("artifact fixture turn count does not match turn evidence");
+      }
+      if (
+        artifact.statistics.fixtureTerminalReceipts !==
+        fixtureTerminalReceipts
+      ) {
+        issues.push(
+          "artifact fixture terminal receipt count does not match receipt evidence",
+        );
+      }
+      if (
+        canonicalStringify(observedSchedule) !==
+        canonicalStringify(artifact.statistics.fixtureSchedule)
+      ) {
+        issues.push(
+          "artifact fixture schedule does not match turn and receipt evidence",
+        );
+      }
+      if (uniqueFixtureTicks !== undefined && resolvedCohort !== undefined) {
+        const expectedScheduleKeys = artifact.mode === "native"
+          ? []
+          : expectedFixtureMatrixKeys(uniqueFixtureTicks, resolvedCohort);
+        const observedScheduleKeys = observedFixtureMatrixKeys(observedSchedule);
+        if (
+          canonicalStringify(observedScheduleKeys) !==
+          canonicalStringify(expectedScheduleKeys)
+        ) {
+          issues.push(
+            "observed fixture schedule does not match the pinned citizen/tick matrix",
+          );
+        }
+      }
+    }
+  }
+  if (persistedEvents !== undefined && persistedManifest !== undefined) {
+    const observedAuthoritativeSchedule = captureVerificationEvidence(
+      "authoritative fixture event evidence",
+      issues,
+      () => authoritativeFixtureScheduleFor(
+        persistedEvents,
+        persistedManifest.scenario.opportunityFixture?.version,
+      ),
+    );
+    if (observedAuthoritativeSchedule !== undefined) {
+      if (
+        canonicalStringify(observedAuthoritativeSchedule) !==
+        canonicalStringify(artifact.statistics.authoritativeFixtureSchedule)
+      ) {
+        issues.push(
+          "artifact authoritative fixture schedule does not match event evidence",
+        );
+      }
+      if (uniqueFixtureTicks !== undefined && resolvedCohort !== undefined) {
+        // Native trials have no Agent Lab sidecar turns, but their deterministic
+        // Tier-1 fixture choices still produce authoritative commitment events.
+        const authoritativeScheduleKeys = observedFixtureMatrixKeys(
+          observedAuthoritativeSchedule,
+        );
+        const expectedAuthoritativeScheduleKeys = expectedFixtureMatrixKeys(
+          uniqueFixtureTicks,
+          resolvedCohort,
+        );
+        if (
+          canonicalStringify(authoritativeScheduleKeys) !==
+          canonicalStringify(expectedAuthoritativeScheduleKeys)
+        ) {
+          issues.push(
+            "authoritative fixture schedule does not match the pinned citizen/tick matrix",
+          );
+        }
+      }
+    }
+  }
+  if (
+    turns !== undefined &&
+    runtimeHermesRuns !== undefined &&
+    toolCalls !== undefined
+  ) {
+    const observedHermesEvidenceSchedule = captureVerificationEvidence(
+      "fixture Hermes evidence",
+      issues,
+      () => fixtureHermesEvidenceFor(turns, runtimeHermesRuns, toolCalls),
+    );
+    if (
+      observedHermesEvidenceSchedule !== undefined &&
+      canonicalStringify(observedHermesEvidenceSchedule) !==
+        canonicalStringify(artifact.statistics.fixtureHermesEvidenceSchedule)
+    ) {
+      issues.push(
+        "artifact fixture Hermes schedule does not match runtime and tool-call evidence",
+      );
+    }
+  }
+  if (persistedManifest !== undefined && resolvedCohort !== undefined) {
+    if (resolvedCohort.length !== persistedManifest.cohort.size) {
+      issues.push(
+        `runtime cohort has ${resolvedCohort.length} citizens; ` +
+        `manifest pins ${persistedManifest.cohort.size}`,
+      );
+    }
   }
   try {
     const taint = taintRecordSchema.parse(
@@ -565,6 +1392,9 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
       issues.push(
         `trial is tainted: ${taint.reasons.map((reason) => reason.code).join(", ")}`,
       );
+    }
+    if (canonicalStringify(taint) !== canonicalStringify(artifact.taint)) {
+      issues.push("artifact taint does not match taint evidence");
     }
     const score = experimentScorecardSchema.parse(
       canonicalParse(readFileSync(join(root, "scorecard.json"), "utf8")),
@@ -578,32 +1408,22 @@ export function verifyTrialArtifact(directory: string): ArtifactVerification {
     const unauthorizedMetric = score.structural.find(
       (metric) => metric.metricId === "unauthorized_applied_actions",
     );
+    const budgetViolationMetric = score.operational.find(
+      (metric) => metric.metricId === "budget_violations",
+    );
     if (invariantMetric?.value !== 1) issues.push("structural invariants did not pass");
     if (replayMetric?.value !== 0) issues.push("strict replay has divergences");
     if (unauthorizedMetric?.value !== 0) issues.push("an unauthorized action was applied");
-  } catch (error) {
-    issues.push(`scorecard or taint evidence is invalid: ${String(error)}`);
-  }
-  try {
-    const runtime = canonicalParse(
-      readFileSync(join(root, "runtime.json"), "utf8"),
-    ) as Readonly<Record<string, unknown>>;
-    const runs = runtime["hermesRuns"];
-    if (!Array.isArray(runs)) throw new Error("hermesRuns is not an array");
-    for (const run of runs) {
-      if (typeof run !== "object" || run === null) {
-        throw new Error("Hermes run evidence is not an object");
-      }
-      const violations = (run as Readonly<Record<string, unknown>>)["budgetViolations"];
-      if (!Array.isArray(violations)) {
-        throw new Error("Hermes run budgetViolations is not an array");
-      }
-      for (const violation of violations) {
-        issues.push(`Hermes budget violation: ${String(violation)}`);
-      }
+    if (
+      runtimeBudgetViolationCount !== undefined &&
+      budgetViolationMetric?.value !== runtimeBudgetViolationCount
+    ) {
+      issues.push(
+        "scorecard budget violation count does not match runtime Hermes evidence",
+      );
     }
   } catch (error) {
-    issues.push(`runtime evidence is invalid: ${String(error)}`);
+    issues.push(`scorecard or taint evidence is invalid: ${String(error)}`);
   }
   return {
     valid: issues.length === 0,

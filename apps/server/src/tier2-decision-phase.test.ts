@@ -3,13 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
+  AGENT_LAB_PILOT_FIXTURE_TICKS,
   canonicalStringify,
+  compareCodeUnit,
   eventEnvelopeSchema,
   IdFactory,
   Rng,
   type EventEnvelope,
+  type RunManifestAgentLab,
 } from "@worldtangle/shared";
 import {
+  checkInvariants,
   EventBus,
   generateRiverbendPopulation,
   GoalLifecycleEngine,
@@ -44,6 +49,8 @@ import {
   type Tier2DecisionOpportunity,
 } from "./tier2-decision-phase";
 import { SimulationService } from "./simulation-service";
+import { buildAgentLabTestScenario } from "./testing/agent-lab-test-fixture";
+import { readRunInvariantSnapshot } from "./testing/run-invariant-probe";
 
 const directories: string[] = [];
 const databases: WorldDatabase[] = [];
@@ -62,6 +69,8 @@ interface Tier2Fixture {
 }
 
 type TickFixture = Pick<Tier2Fixture, "db" | "ids" | "events">;
+const digest = "a".repeat(64);
+const AGENT_LAB_FIXTURE_TICK = 10;
 
 function checkpointFixture(base: TickFixture, currentTick: number): void {
   base.db.prepare(`
@@ -232,6 +241,80 @@ function goalFixture(): TickFixture {
   return base;
 }
 
+function activeGoalFixture(): TickFixture & {
+  readonly agentId: string;
+  readonly goalId: string;
+} {
+  const dataDir = mkdtempSync(join(tmpdir(), "worldtangle-tier2-goal-progress-"));
+  directories.push(dataDir);
+  const db = openWorldDatabase(dataDir, TEST_SIMULATION_ID, TEST_RUN_ID);
+  databases.push(db);
+  insertTestRun(db);
+  const population = generateRiverbendPopulation({ runId: TEST_RUN_ID, seed: 42 });
+  const triggers = new Map(population.residents.map((resident) => [
+    resident.agent.id,
+    `evt_${(resident.rosterIndex + 1).toString(36).padStart(8, "0")}`,
+  ]));
+  const agentStore = new SqliteAgentStore(db, TEST_RUN_ID);
+  agentStore.insertPopulation(population, triggers);
+  const agentId = population.residents
+    .map((resident) => resident.agent.id)
+    .find((candidateId) => agentStore.listByAgent(candidateId).filter((record) => (
+      record.goal.status === "active" || record.goal.status === "dormant"
+    )).length >= 2);
+  if (agentId === undefined) {
+    throw new Error("Riverbend population has no agent with 2+ available goals");
+  }
+  const activeGoal = agentStore.listByAgent(agentId)
+    .find((record) => record.goal.status === "active");
+  if (activeGoal === undefined) {
+    throw new Error(`fixture agent ${agentId} has no active goal`);
+  }
+  const base = {
+    db,
+    ids: IdFactory.restore(population.idState),
+    events: new SqliteEventStore(db, TEST_RUN_ID),
+    agentId,
+    goalId: activeGoal.goal.id,
+  };
+  checkpointFixture(base, AGENT_LAB_FIXTURE_TICK - 1);
+  return base;
+}
+
+function agentLabFixture(agentId: string): RunManifestAgentLab {
+  const scenario = buildAgentLabTestScenario({
+    studyId: "tier2-goal-progress",
+    trialId: "tier2-goal-progress-native",
+    digest,
+    mode: "native",
+    agentIds: [agentId],
+    fixtureTicks: [AGENT_LAB_FIXTURE_TICK],
+  });
+  return {
+    ...scenario,
+    resolvedAssignments: [{ agentId, controller: "native" }],
+  };
+}
+
+function expectFixtureIneligibilityIsIsolated(
+  base: TickFixture,
+  agentLab: RunManifestAgentLab,
+): void {
+  const control = discoverTier2DecisionOpportunities(
+    base.db,
+    TEST_RUN_ID,
+    AGENT_LAB_FIXTURE_TICK,
+  );
+  const withFixture = discoverTier2DecisionOpportunities(
+    base.db,
+    TEST_RUN_ID,
+    AGENT_LAB_FIXTURE_TICK,
+    agentLab,
+  );
+  expect(withFixture).toEqual(control);
+  expect(withFixture.some((entry) => entry.kind === "goal_commitment")).toBe(false);
+}
+
 interface OfferedProposal {
   readonly actionId: string;
   readonly params: unknown;
@@ -254,9 +337,16 @@ async function runPreparedTick(
     readonly select?: (
       opportunities: readonly Tier2DecisionOpportunity[],
     ) => readonly Tier2DecisionOpportunity[];
+    readonly agentLab?: RunManifestAgentLab;
+    readonly beforeApply?: () => void;
   },
 ) {
-  const discovered = discoverTier2DecisionOpportunities(base.db, TEST_RUN_ID, input.tick);
+  const discovered = discoverTier2DecisionOpportunities(
+    base.db,
+    TEST_RUN_ID,
+    input.tick,
+    input.agentLab,
+  );
   const opportunities = input.select?.(discovered) ?? discovered;
   expect(opportunities.map((opportunity) => opportunity.kind)).toEqual(input.expectedKinds);
   const batch = await prepareTier2DecisionBatch({
@@ -266,7 +356,14 @@ async function runPreparedTick(
     provider,
     promptPackVersion: 1,
     opportunities,
+    ...(input.agentLab === undefined
+      ? {}
+      : {
+          simulationId: TEST_SIMULATION_ID,
+          agentLab: input.agentLab,
+        }),
   });
+  input.beforeApply?.();
   const checkpoint = readRunCheckpoint(base.db, TEST_RUN_ID);
   expect(checkpoint.currentTick).toBe(input.tick - 1);
   const committer = new SqliteTickCommitter(base.db, base.events);
@@ -479,6 +576,90 @@ describe("WS-605 prepared Tier-2 decision barrier", () => {
     ))).toHaveLength(2);
   });
 
+  it("runs the matched Agent Lab goal fixture through the production service", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "worldtangle-agent-lab-fixture-"));
+    const endTick = Math.max(...AGENT_LAB_PILOT_FIXTURE_TICKS);
+    directories.push(dataDir);
+    const service = new SimulationService({
+      dataDir,
+      enableNewsPipeline: false,
+      wallClock: () => "2026-07-15T12:00:00.000Z",
+      tickIntervalMs: 60_000,
+      snapshotIntervalTicks: 100,
+    });
+    services.push(service);
+    const created = service.createSimulation({
+      name: "Matched native Agent Lab fixture",
+      scenario: {
+        worldSpec: "riverbend-100@1",
+        seed: 42,
+        llmMode: "mock",
+        budgets: { runCostCentsMax: "1000", perAgentDailyTokens: 20_000 },
+        policyOverrides: {},
+        endTick,
+        agentLab: buildAgentLabTestScenario({
+          studyId: "tier2-service-fixture",
+          trialId: "tier2-service-fixture-native",
+          digest,
+          mode: "native",
+          cohortSize: 8,
+          fixtureTicks: AGENT_LAB_PILOT_FIXTURE_TICKS,
+        }),
+      },
+    }, "tier2-fixture-create");
+    expect(created.run.manifest.agentLab?.resolvedAssignments).toHaveLength(8);
+    service.controlSimulation(created.simulation.id, "start", {}, "tier2-fixture-start");
+    service.controlSimulation(created.simulation.id, "pause", {}, "tier2-fixture-pause");
+
+    const advanced = await service.advanceSimulation(
+      created.simulation.id,
+      { runId: created.run.id, ticks: endTick },
+      "tier2-fixture-advance",
+    );
+    expect(advanced).toMatchObject({
+      statusCode: 200,
+      body: { run: { currentTick: endTick } },
+    });
+
+    const verified = openWorldDatabase(dataDir, created.simulation.id, created.run.id);
+    databases.push(verified);
+    const commitmentCalls = new SqliteLlmCallStore(verified, created.run.id).list().filter(
+      (call) => call.purpose === "decision.tier2.goal_commitment",
+    );
+    const executedFixtureTicks = [...AGENT_LAB_PILOT_FIXTURE_TICKS];
+    const assignedAgents =
+      created.run.manifest.agentLab?.resolvedAssignments.length ?? 0;
+    const expectedCommitments = assignedAgents * executedFixtureTicks.length;
+    expect(commitmentCalls).toHaveLength(expectedCommitments);
+    expect(executedFixtureTicks.map((fixtureTick) => [
+      fixtureTick,
+      commitmentCalls.filter((call) => call.tick === fixtureTick).length,
+    ])).toEqual(
+      executedFixtureTicks.map((fixtureTick) => [fixtureTick, assignedAgents]),
+    );
+    const commitmentDecisionIds = new Set(
+      commitmentCalls.map((call) => call.decisionId),
+    );
+    const commitmentActions = new SqliteAgentStore(verified, created.run.id)
+      .listActions()
+      .filter((action) => (
+        action.decisionId !== undefined &&
+        commitmentDecisionIds.has(action.decisionId)
+      ));
+    expect(commitmentActions).toHaveLength(expectedCommitments);
+    expect(commitmentActions.every((action) => (
+      (
+        action.type === "agent.reaffirm_goal" ||
+        action.type === "agent.defer_goal"
+      ) &&
+      action.status === "applied"
+    ))).toBe(true);
+    const invariants = checkInvariants(
+      readRunInvariantSnapshot(verified, created.run.id),
+    );
+    expect(invariants.passed, JSON.stringify(invariants.violations)).toBe(true);
+  });
+
   it("commits mock founder and applicant choices with calls, actions, effects, and memories", async () => {
     const base = fixture();
     const provider = new MockLlmProvider({
@@ -681,6 +862,423 @@ describe("WS-605 prepared Tier-2 decision barrier", () => {
       event.type === "agent.goal.activated" &&
       (event.payload as { goalId?: string }).goalId === goalId
     ))).toBe(true);
+  });
+
+  it("records only the offered goal commitment in the pinned Agent Lab fixture", async () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const before = agentStore.get(base.goalId)!.goal.progress;
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.reaffirm"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+    });
+
+    expect(agentStore.get(base.goalId)?.goal.progress).toBe(before);
+    const recorded = base.events.list().filter((event) => (
+      event.tick === AGENT_LAB_FIXTURE_TICK &&
+      event.type === "agent.goal.commitment_recorded"
+    ));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.payload).toMatchObject({
+      agentId: base.agentId,
+      goalId: base.goalId,
+      status: "active",
+      progress: before,
+      fixtureVersion: AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
+    });
+    const decision = agentStore.listDecisions(base.agentId, { limit: 20 })
+      .find((candidate) => (
+        candidate.tick === AGENT_LAB_FIXTURE_TICK &&
+        candidate.chosenActionId === "goal.reaffirm"
+      ));
+    expect(decision).toBeDefined();
+    expect(recorded[0]!.correlationId).toBe(decision!.id);
+  });
+
+  it("prefers an active commitment goal even when its ID sorts after a dormant goal", () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const records = agentStore.listByAgent(base.agentId)
+      .filter((record) => (
+        record.goal.status === "active" || record.goal.status === "dormant"
+      ))
+      .sort((left, right) => (
+        left.goal.id < right.goal.id ? -1 : left.goal.id > right.goal.id ? 1 : 0
+      ));
+    const originalActive = records.find((record) => record.goal.status === "active");
+    if (originalActive === undefined) {
+      throw new Error(`fixture agent ${base.agentId} has no active goal`);
+    }
+    const laterDormant = records.find((record) => (
+      record.goal.status === "dormant" &&
+      record.goal.id > originalActive.goal.id
+    ));
+    if (laterDormant === undefined) {
+      throw new Error(
+        `fixture agent ${base.agentId} has no dormant goal sorting after ` +
+          originalActive.goal.id,
+      );
+    }
+    agentStore.transition(originalActive, {
+      ...originalActive,
+      goal: { ...originalActive.goal, status: "dormant" },
+    });
+    agentStore.transition(laterDormant, {
+      ...laterDormant,
+      goal: { ...laterDormant.goal, status: "active" },
+    });
+
+    const opportunity = discoverTier2DecisionOpportunities(
+      base.db,
+      TEST_RUN_ID,
+      AGENT_LAB_FIXTURE_TICK,
+      agentLabFixture(base.agentId),
+    ).find((entry) => entry.kind === "goal_commitment")!;
+    const trustedState = opportunity.trustedState as {
+      selectedGoal: { id: string; status: string };
+    };
+
+    expect(trustedState.selectedGoal).toMatchObject({
+      id: laterDormant.goal.id,
+      status: "active",
+    });
+  });
+
+  it("selects the lowest goal ID when every commitment goal is dormant", () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const active = agentStore.listByAgent(base.agentId)
+      .find((record) => record.goal.status === "active")!;
+    agentStore.transition(active, {
+      ...active,
+      goal: { ...active.goal, status: "dormant" },
+    });
+    const expectedGoalId = agentStore.listByAgent(base.agentId)
+      .filter((record) => record.goal.status === "dormant")
+      .map((record) => record.goal.id)
+      .sort(compareCodeUnit)[0]!;
+
+    const opportunity = discoverTier2DecisionOpportunities(
+      base.db,
+      TEST_RUN_ID,
+      AGENT_LAB_FIXTURE_TICK,
+      agentLabFixture(base.agentId),
+    ).find((entry) => entry.kind === "goal_commitment")!;
+    const trustedState = opportunity.trustedState as {
+      selectedGoal: { id: string; status: string };
+    };
+
+    expect(trustedState.selectedGoal).toMatchObject({
+      id: expectedGoalId,
+      status: "dormant",
+    });
+  });
+
+  it("does not offer a goal commitment outside the pinned fixture ticks", () => {
+    const base = activeGoalFixture();
+    const opportunities = discoverTier2DecisionOpportunities(
+      base.db,
+      TEST_RUN_ID,
+      AGENT_LAB_FIXTURE_TICK + 1,
+      agentLabFixture(base.agentId),
+    );
+
+    expect(opportunities.filter((entry) => entry.kind === "goal_commitment")).toEqual([]);
+  });
+
+  it("isolates a fixture assignment that references a missing agent", () => {
+    const base = activeGoalFixture();
+
+    expectFixtureIneligibilityIsIsolated(
+      base,
+      agentLabFixture("agt_zzzzzzzz"),
+    );
+  });
+
+  it("isolates a quarantined fixture agent", () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    agentStore.setAgentQuarantine(base.agentId, {
+      mode: "tier1_only",
+      untilTick: AGENT_LAB_FIXTURE_TICK,
+      consecutiveFailures: 1,
+    });
+
+    expectFixtureIneligibilityIsIsolated(base, agentLabFixture(base.agentId));
+
+    agentStore.setAgentQuarantine(base.agentId, {
+      mode: "tier1_only",
+      untilTick: AGENT_LAB_FIXTURE_TICK - 1,
+      consecutiveFailures: 1,
+    });
+    expect(discoverTier2DecisionOpportunities(
+      base.db,
+      TEST_RUN_ID,
+      AGENT_LAB_FIXTURE_TICK,
+      agentLabFixture(base.agentId),
+    ).filter((entry) => entry.kind === "goal_commitment")).toHaveLength(1);
+  });
+
+  it("isolates a fixture agent that cannot act", () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const aliveFlags = agentStore.getProfile(base.agentId).agent.aliveFlags;
+    base.db.prepare(`
+      UPDATE agents SET alive_flags_canonical = ?
+      WHERE run_id = ? AND id = ?
+    `).run(
+      canonicalStringify({ ...aliveFlags, canAct: false }),
+      TEST_RUN_ID,
+      base.agentId,
+    );
+
+    expectFixtureIneligibilityIsIsolated(base, agentLabFixture(base.agentId));
+  });
+
+  it("isolates a fixture agent with no eligible goal", () => {
+    const base = activeGoalFixture();
+    base.db.prepare(`
+      UPDATE goals SET status = 'achieved', terminal_tick = ?
+      WHERE run_id = ? AND agent_id = ?
+    `).run(AGENT_LAB_FIXTURE_TICK - 1, TEST_RUN_ID, base.agentId);
+
+    expectFixtureIneligibilityIsIsolated(base, agentLabFixture(base.agentId));
+  });
+
+  it("records an authenticated fixture event when a goal commitment is deferred", async () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const before = agentStore.get(base.goalId)!.goal.progress;
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.defer"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+    });
+
+    expect(agentStore.get(base.goalId)?.goal.progress).toBe(before);
+    expect(agentStore.listActions().some((action) => (
+      action.actorId === base.agentId &&
+      action.type === "agent.defer_goal" &&
+      action.status === "applied"
+    ))).toBe(true);
+    expect(base.events.list().find((event) => (
+      event.tick === AGENT_LAB_FIXTURE_TICK &&
+      event.type === "agent.goal.commitment_recorded"
+    ))).toMatchObject({
+      actor: { kind: "agent", id: base.agentId },
+      payload: {
+        agentId: base.agentId,
+        goalId: base.goalId,
+        kind: "save_amount",
+        status: "active",
+        progress: before,
+        fixtureVersion: AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
+        actionType: "agent.defer_goal",
+      },
+    });
+  });
+
+  it("fails a reaffirm action whose prepared fixture version drifted", async () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const goalBeforeApply = agentStore.get(base.goalId)!.goal;
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.reaffirm"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      select: (opportunities) => opportunities.map((opportunity) => Object.freeze({
+        ...opportunity,
+        trustedState: Object.freeze({
+          ...(opportunity.trustedState as Readonly<Record<string, unknown>>),
+          fixtureVersion: "unexpected_fixture_v2",
+        }),
+      })),
+    });
+
+    const action = agentStore.listActions()
+      .find((candidate) => candidate.type === "agent.reaffirm_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("unexpected fixture version");
+    expect(agentStore.get(base.goalId)?.goal).toEqual(goalBeforeApply);
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
+  });
+
+  it("fails a defer action whose prepared fixture version drifted", async () => {
+    const base = activeGoalFixture();
+    const agentStore = new SqliteAgentStore(base.db, TEST_RUN_ID);
+    const goalBeforeApply = agentStore.get(base.goalId)!.goal;
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.defer"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      select: (opportunities) => opportunities.map((opportunity) => Object.freeze({
+        ...opportunity,
+        trustedState: Object.freeze({
+          ...(opportunity.trustedState as Readonly<Record<string, unknown>>),
+          fixtureVersion: "unexpected_fixture_v2",
+        }),
+      })),
+    });
+
+    const action = agentStore.listActions()
+      .find((candidate) => candidate.type === "agent.defer_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("unexpected fixture version");
+    expect(agentStore.get(base.goalId)?.goal).toEqual(goalBeforeApply);
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
+  });
+
+  it("fails a reaffirm action when the offered goal disappears before apply", async () => {
+    const base = activeGoalFixture();
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.reaffirm"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      beforeApply: () => {
+        base.db.prepare(`
+          DELETE FROM goals
+          WHERE run_id = ? AND id = ?
+        `).run(TEST_RUN_ID, base.goalId);
+      },
+    });
+
+    const action = new SqliteAgentStore(base.db, TEST_RUN_ID).listActions()
+      .find((candidate) => candidate.type === "agent.reaffirm_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("offered goal is no longer available");
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
+  });
+
+  it("fails a reaffirm action when the offered goal becomes terminal before apply", async () => {
+    const base = activeGoalFixture();
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.reaffirm"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      beforeApply: () => {
+        base.db.prepare(`
+          UPDATE goals SET status = 'achieved', terminal_tick = ?
+          WHERE run_id = ? AND id = ?
+        `).run(AGENT_LAB_FIXTURE_TICK - 1, TEST_RUN_ID, base.goalId);
+      },
+    });
+
+    const action = new SqliteAgentStore(base.db, TEST_RUN_ID).listActions()
+      .find((candidate) => candidate.type === "agent.reaffirm_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("offered goal is no longer available");
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
+  });
+
+  it("fails a defer action when the offered goal disappears before apply", async () => {
+    const base = activeGoalFixture();
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.defer"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      beforeApply: () => {
+        base.db.prepare(`
+          DELETE FROM goals
+          WHERE run_id = ? AND id = ?
+        `).run(TEST_RUN_ID, base.goalId);
+      },
+    });
+
+    const action = new SqliteAgentStore(base.db, TEST_RUN_ID).listActions()
+      .find((candidate) => candidate.type === "agent.defer_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("offered goal is no longer available");
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
+  });
+
+  it("fails a defer action when the offered goal becomes terminal before apply", async () => {
+    const base = activeGoalFixture();
+    const provider = new MockLlmProvider({
+      script: (request) => optionFor(request, "goal.defer"),
+    });
+
+    await runPreparedTick(base, provider, {
+      tick: AGENT_LAB_FIXTURE_TICK,
+      expectedKinds: ["goal_commitment"],
+      agentLab: agentLabFixture(base.agentId),
+      beforeApply: () => {
+        base.db.prepare(`
+          UPDATE goals SET status = 'achieved', terminal_tick = ?
+          WHERE run_id = ? AND id = ?
+        `).run(AGENT_LAB_FIXTURE_TICK - 1, TEST_RUN_ID, base.goalId);
+      },
+    });
+
+    const action = new SqliteAgentStore(base.db, TEST_RUN_ID).listActions()
+      .find((candidate) => candidate.type === "agent.defer_goal");
+    expect(action).toMatchObject({
+      actorId: base.agentId,
+      status: "failed",
+      error: { code: "CONFLICT" },
+    });
+    expect(action?.error?.message).toContain("offered goal is no longer available");
+    expect(base.events.list().some((event) => (
+      event.type === "agent.goal.commitment_recorded"
+    ))).toBe(false);
   });
 
   it("rejects forged params, records a validation fallback, and applies only an offered action", async () => {

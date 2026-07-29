@@ -3,23 +3,41 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import type {
-  AgentTurnEnvelope,
-  ExperimentManifest,
+import {
+  agentTurnEnvelopeSchema,
+  type AgentTurnEnvelope,
+  type ExperimentManifest,
 } from "@worldtangle/shared";
+import { z } from "zod";
 import { CITIZEN_TURN_PROMPT } from "./driver-policy";
 import { providerEnvironmentNames } from "./provider-environment";
 
-export interface HermesTurnStats {
-  readonly runId: string;
-  readonly agentId: string;
-  readonly targetTick: number;
-  readonly status: "completed" | "failed" | "cancelled";
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly latencyMs: number;
-  readonly budgetViolations: readonly string[];
-  readonly failure?: string;
+export const hermesTurnStatsSchema = z.strictObject({
+  runId: z.string().min(1).max(240),
+  turnId: agentTurnEnvelopeSchema.shape.turnId.optional(),
+  opportunityKey: z.string().min(1).max(240).optional(),
+  agentId: z.string().regex(/^agt_[0-9a-z]{8,}$/),
+  targetTick: z.number().int().positive(),
+  status: z.enum(["completed", "failed", "cancelled"]),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  latencyMs: z.number().int().nonnegative(),
+  budgetViolations: z.array(z.string()),
+  failure: z.string().max(1_000).optional(),
+});
+type ParsedHermesTurnStats = z.infer<typeof hermesTurnStatsSchema>;
+export type HermesTurnStats = Readonly<
+  Omit<ParsedHermesTurnStats, "budgetViolations"> & {
+    readonly budgetViolations: readonly string[];
+  }
+>;
+
+function validatedHermesTurnStats(value: unknown): HermesTurnStats {
+  const parsed = hermesTurnStatsSchema.parse(value);
+  return Object.freeze({
+    ...parsed,
+    budgetViolations: Object.freeze([...parsed.budgetViolations]),
+  });
 }
 
 export interface HermesEndpoint {
@@ -29,6 +47,7 @@ export interface HermesEndpoint {
   readonly profileId: string;
   readonly sessionId: string;
   readonly sessionKey: string;
+  readonly terminateProfile: () => Promise<void>;
 }
 
 export interface HermesProfileCredential {
@@ -41,6 +60,22 @@ interface HermesRunStatus {
   readonly status?: unknown;
   readonly usage?: unknown;
   readonly error?: unknown;
+}
+
+type HermesTerminalStatus = HermesRunStatus & {
+  readonly status: "completed" | "failed" | "cancelled";
+};
+
+interface HermesBudgetReservation {
+  readonly tickKey: string;
+  readonly tokens: number;
+  readonly costMicrocents: bigint;
+}
+
+interface HermesAccountedUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly violations: readonly string[];
 }
 
 interface HermesToolsetsResponse {
@@ -210,12 +245,19 @@ function inheritedRuntimeEnvironment(
   );
 }
 
-function redactSecrets(text: string, secrets: readonly (string | undefined)[]): string {
+export function redactSecrets(
+  text: string,
+  secrets: readonly (string | undefined)[],
+): string {
   let sanitized = text.replaceAll(/wtpat_[A-Za-z0-9._-]+/g, "[REDACTED]");
-  for (const secret of secrets) {
-    if (secret !== undefined && secret.length > 0) {
-      sanitized = sanitized.replaceAll(secret, "[REDACTED]");
-    }
+  const orderedSecrets = [...new Set(secrets.filter(
+    (secret): secret is string => secret !== undefined && secret.length >= 8,
+  ))].sort((left, right) => (
+    right.length - left.length ||
+    (left < right ? -1 : left > right ? 1 : 0)
+  ));
+  for (const secret of orderedSecrets) {
+    sanitized = sanitized.replaceAll(secret, "[REDACTED]");
   }
   return sanitized;
 }
@@ -249,6 +291,59 @@ export function buildHermesProfileEnvironment(
   };
 }
 
+export async function terminateHermesProcess(child: ChildProcess): Promise<void> {
+  const processExited = (): boolean =>
+    child.exitCode !== null || child.signalCode !== null;
+  const stdioClosed = (): boolean => (
+    [child.stdin, child.stdout, child.stderr].every(
+      (stream) =>
+        stream === null ||
+        stream === undefined ||
+        stream.destroyed ||
+        stream.closed,
+    )
+  );
+  if (processExited() && stdioClosed()) return;
+  const exited = new Promise<void>((resolve) => {
+    // `exit` can precede closure of Windows stdio/file handles. Waiting for
+    // `close` prevents profile cleanup from racing those retained handles.
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
+  });
+  const waitForExit = async (): Promise<boolean> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        exited.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), 3_000);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  if (processExited()) {
+    if (await waitForExit() || stdioClosed()) return;
+    throw new Error("Hermes process exited but its stdio handles did not close");
+  }
+  child.kill("SIGTERM");
+  if (await waitForExit()) return;
+  if (processExited()) {
+    if (stdioClosed() || await waitForExit()) return;
+    throw new Error("Hermes process exited but its stdio handles did not close");
+  }
+  child.kill("SIGKILL");
+  if (await waitForExit()) return;
+  if (!processExited()) {
+    throw new Error("Hermes process did not exit after SIGKILL");
+  }
+  if (!stdioClosed()) {
+    throw new Error("Hermes process exited after SIGKILL but its stdio handles did not close");
+  }
+}
+
 export class HermesProfileFleet {
   private readonly processes: ChildProcess[] = [];
   private readonly profileRoots: string[] = [];
@@ -257,6 +352,12 @@ export class HermesProfileFleet {
     private readonly trialRoot: string,
     private readonly executable = process.env["HERMES_EXECUTABLE"] ?? "hermes",
   ) {}
+
+  private async terminateTrackedProcess(child: ChildProcess): Promise<void> {
+    await terminateHermesProcess(child);
+    const processIndex = this.processes.indexOf(child);
+    if (processIndex >= 0) this.processes.splice(processIndex, 1);
+  }
 
   async start(
     manifest: ExperimentManifest,
@@ -290,6 +391,12 @@ export class HermesProfileFleet {
         ].join("\n"),
         { encoding: "utf8", mode: 0o600 },
       );
+      const child = spawn(this.executable, ["gateway"], {
+        cwd: profileRoot,
+        env: buildHermesProfileEnvironment(manifest, profileRoot),
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      });
       const endpoint: HermesEndpoint = Object.freeze({
         baseUrl: `http://127.0.0.1:${port}`,
         apiKey,
@@ -297,12 +404,7 @@ export class HermesProfileFleet {
         profileId,
         sessionId: `worldtangle:${manifest.studyId}:${credential.agentId}`,
         sessionKey: `worldtangle-agent:${credential.agentId}`,
-      });
-      const child = spawn(this.executable, ["gateway"], {
-        cwd: profileRoot,
-        env: buildHermesProfileEnvironment(manifest, profileRoot),
-        stdio: ["ignore", "ignore", "pipe"],
-        windowsHide: true,
+        terminateProfile: () => this.terminateTrackedProcess(child),
       });
       let startupError = "";
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -328,47 +430,201 @@ export class HermesProfileFleet {
     return endpoints;
   }
 
-  async stop(): Promise<void> {
-    for (const child of this.processes.splice(0)) {
-      if (child.exitCode !== null) continue;
-      child.kill("SIGTERM");
-      await Promise.race([
-        new Promise<void>((resolve) => child.once("exit", () => resolve())),
-        new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
-      ]);
-      if (child.exitCode === null) child.kill("SIGKILL");
+  async stopProcesses(): Promise<void> {
+    const terminationErrors = (
+      await Promise.all(
+        this.processes.splice(0).map(async (child): Promise<unknown | null> => {
+          try {
+            await terminateHermesProcess(child);
+            return null;
+          } catch (error) {
+            return error;
+          }
+        }),
+      )
+    ).filter((error) => error !== null);
+    if (terminationErrors.length > 0) {
+      throw new AggregateError(
+        terminationErrors,
+        "one or more Hermes processes could not be terminated",
+      );
     }
+  }
+
+  async removeProfiles(): Promise<void> {
+    const profileRemovalErrors: unknown[] = [];
+    const retainedProfileRoots: string[] = [];
     for (const root of this.profileRoots.splice(0)) {
-      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      try {
+        rmSync(root, {
+          recursive: true,
+          force: true,
+          maxRetries: 50,
+          retryDelay: 100,
+        });
+      } catch (error) {
+        retainedProfileRoots.push(root);
+        profileRemovalErrors.push(error);
+      }
     }
+    this.profileRoots.push(...retainedProfileRoots);
+    if (profileRemovalErrors.length > 0) {
+      throw new AggregateError(
+        profileRemovalErrors,
+        "one or more Hermes profile roots could not be removed",
+      );
+    }
+  }
+
+  async stop(): Promise<void> {
+    await this.stopProcesses();
+    await this.removeProfiles();
   }
 }
 
-function usage(status: HermesRunStatus): { inputTokens: number; outputTokens: number } {
+interface HermesUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+function usage(status: HermesRunStatus): HermesUsage | null {
   const value = status.usage;
-  if (typeof value !== "object" || value === null) {
-    return { inputTokens: 0, outputTokens: 0 };
-  }
+  if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
-  return {
-    inputTokens: typeof record["input_tokens"] === "number"
-      ? record["input_tokens"]
-      : 0,
-    outputTokens: typeof record["output_tokens"] === "number"
-      ? record["output_tokens"]
-      : 0,
-  };
+  const inputTokens = record["input_tokens"];
+  const outputTokens = record["output_tokens"];
+  if (
+    typeof inputTokens !== "number" ||
+    !Number.isSafeInteger(inputTokens) ||
+    inputTokens < 0 ||
+    typeof outputTokens !== "number" ||
+    !Number.isSafeInteger(outputTokens) ||
+    outputTokens < 0
+  ) return null;
+  return { inputTokens, outputTokens };
+}
+
+const HERMES_POLL_INTERVAL_MS = 100;
+const HERMES_MAX_CONSECUTIVE_POLL_FAILURES = 2;
+const HERMES_STOP_REQUEST_BUDGET_MS = 1_000;
+const HERMES_RESPONSE_BODY_LIMIT_BYTES = 1_048_576;
+const MAX_TIMER_DELAY_MS = 2_147_000_000;
+
+class HermesRequestDeadlineError extends Error {
+  constructor(context: string) {
+    const deadlineName = context === "stop"
+      ? "cleanup deadline"
+      : "decision deadline";
+    super(`Hermes ${context} request exceeded the ${deadlineName}`);
+    this.name = "HermesRequestDeadlineError";
+  }
+}
+
+class HermesPollProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HermesPollProtocolError";
+  }
+}
+
+class HermesTransientPollError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HermesTransientPollError";
+  }
+}
+
+interface HermesDeadlineResponse {
+  readonly response: Response;
+  readonly bodyText: string | null;
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  context: string,
+): Promise<string> {
+  const body = response.body;
+  if (body === null) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > HERMES_RESPONSE_BODY_LIMIT_BYTES) {
+        await reader.cancel();
+        throw new HermesPollProtocolError(
+          `Hermes ${context} response body exceeds ` +
+            `${HERMES_RESPONSE_BODY_LIMIT_BYTES} bytes`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function readBeforeDeadline(
+  input: string,
+  init: RequestInit,
+  deadline: number,
+  context: string,
+): Promise<HermesDeadlineResponse> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw new HermesRequestDeadlineError(context);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.min(remainingMs, MAX_TIMER_DELAY_MS),
+  );
+  timeout.unref();
+  try {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    let bodyText: string | null = null;
+    if (response.ok || response.status === 202) {
+      bodyText = await readBoundedResponseText(response, context);
+    } else {
+      // Provider error bodies are untrusted, can be unbounded, and may echo
+      // credentials. Status codes are the complete persisted diagnostic.
+      await response.body?.cancel();
+    }
+    return { response, bodyText };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new HermesRequestDeadlineError(context);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export class HermesApiTurnDriver {
+  private readonly endpoints: Map<string, HermesEndpoint>;
   private readonly perAgentTickTokens = new Map<string, number>();
+  private readonly reservedPerAgentTickTokens = new Map<string, number>();
+  private readonly budgetReservations = new Map<string, HermesBudgetReservation>();
+  private readonly accountedTurns = new Map<string, HermesAccountedUsage>();
   private spentMicrocents = 0n;
+  private reservedMicrocents = 0n;
 
   constructor(
-    private readonly endpoints: ReadonlyMap<string, HermesEndpoint>,
+    endpoints: ReadonlyMap<string, HermesEndpoint>,
     private readonly manifest: ExperimentManifest,
     private readonly prompt = CITIZEN_TURN_PROMPT,
-  ) {}
+  ) {
+    this.endpoints = new Map(endpoints);
+  }
 
   private price(setting: "inputMicrocentsPerToken" | "outputMicrocentsPerToken"): bigint {
     const value = this.manifest.provider.settings[setting];
@@ -387,22 +643,44 @@ export class HermesApiTurnDriver {
       BigInt(outputTokens) * this.price("outputMicrocentsPerToken");
   }
 
-  private dailyKey(turn: AgentTurnEnvelope): string {
+  private turnSecrets(
+    endpoint: HermesEndpoint,
+  ): readonly (string | undefined)[] {
+    return [
+      endpoint.apiKey,
+      endpoint.sessionKey,
+      ...providerEnvironmentNames(this.manifest).map((name) => process.env[name]),
+    ];
+  }
+
+  private tickKey(turn: AgentTurnEnvelope): string {
     return `${turn.agentId}:${turn.targetTick}`;
   }
 
-  private preflightBudget(turn: AgentTurnEnvelope): string | null {
+  private worstCaseUsage(): HermesUsage {
+    return {
+      inputTokens: this.manifest.generationBudget.maxInputTokens,
+      outputTokens: this.manifest.generationBudget.maxOutputTokens,
+    };
+  }
+
+  private reserveBudget(turn: AgentTurnEnvelope): string | null {
+    if (this.budgetReservations.has(turn.turnId)) {
+      throw new Error(`Hermes turn ${turn.turnId} already has a budget reservation`);
+    }
     const worstCaseTokens =
       this.manifest.generationBudget.maxInputTokens +
       this.manifest.generationBudget.maxOutputTokens;
-    const consumed = this.perAgentTickTokens.get(this.dailyKey(turn)) ?? 0;
+    const tickKey = this.tickKey(turn);
+    const consumed = this.perAgentTickTokens.get(tickKey) ?? 0;
+    const reserved = this.reservedPerAgentTickTokens.get(tickKey) ?? 0;
     if (
-      consumed + worstCaseTokens >
+      consumed + reserved + worstCaseTokens >
       this.manifest.scenario.budgets.perAgentDailyTokens
     ) {
       return (
         `per-agent daily token budget cannot cover the pinned turn maximum ` +
-        `(${consumed + worstCaseTokens} > ` +
+        `(${consumed + reserved + worstCaseTokens} > ` +
         `${this.manifest.scenario.budgets.perAgentDailyTokens})`
       );
     }
@@ -412,13 +690,36 @@ export class HermesApiTurnDriver {
     );
     const runLimit =
       BigInt(this.manifest.scenario.budgets.runCostCentsMax) * 1_000_000n;
-    if (this.spentMicrocents + worstCaseCost > runLimit) {
+    if (this.spentMicrocents + this.reservedMicrocents + worstCaseCost > runLimit) {
       return (
         `run cost budget cannot cover the pinned turn maximum ` +
-        `(${this.spentMicrocents + worstCaseCost} > ${runLimit} microcents)`
+        `(${this.spentMicrocents + this.reservedMicrocents + worstCaseCost} > ` +
+        `${runLimit} microcents)`
       );
     }
+    this.budgetReservations.set(turn.turnId, {
+      tickKey,
+      tokens: worstCaseTokens,
+      costMicrocents: worstCaseCost,
+    });
+    this.reservedPerAgentTickTokens.set(tickKey, reserved + worstCaseTokens);
+    this.reservedMicrocents += worstCaseCost;
     return null;
+  }
+
+  private releaseBudgetReservation(turnId: string): void {
+    const reservation = this.budgetReservations.get(turnId);
+    if (reservation === undefined) return;
+    this.budgetReservations.delete(turnId);
+    const remainingTokens =
+      (this.reservedPerAgentTickTokens.get(reservation.tickKey) ?? 0) -
+      reservation.tokens;
+    if (remainingTokens > 0) {
+      this.reservedPerAgentTickTokens.set(reservation.tickKey, remainingTokens);
+    } else {
+      this.reservedPerAgentTickTokens.delete(reservation.tickKey);
+    }
+    this.reservedMicrocents -= reservation.costMicrocents;
   }
 
   private account(
@@ -426,6 +727,14 @@ export class HermesApiTurnDriver {
     inputTokens: number,
     outputTokens: number,
   ): readonly string[] {
+    const accounted = this.accountedTurns.get(turn.turnId);
+    if (accounted !== undefined) {
+      this.releaseBudgetReservation(turn.turnId);
+      throw new Error(
+        `Hermes turn ${turn.turnId} was accounted more than once`,
+      );
+    }
+    this.releaseBudgetReservation(turn.turnId);
     const violations: string[] = [];
     if (inputTokens > this.manifest.generationBudget.maxInputTokens) {
       violations.push(
@@ -440,31 +749,34 @@ export class HermesApiTurnDriver {
       );
     }
     const total = inputTokens + outputTokens;
-    const key = this.dailyKey(turn);
+    const key = this.tickKey(turn);
     const daily = (this.perAgentTickTokens.get(key) ?? 0) + total;
-    this.perAgentTickTokens.set(key, daily);
     if (daily > this.manifest.scenario.budgets.perAgentDailyTokens) {
       violations.push(
         `daily tokens ${daily} exceed per-agent limit ` +
-          `${this.manifest.scenario.budgets.perAgentDailyTokens}`,
+        `${this.manifest.scenario.budgets.perAgentDailyTokens}`,
       );
     }
-    this.spentMicrocents += this.cost(inputTokens, outputTokens);
+    const spentMicrocents = this.spentMicrocents + this.cost(inputTokens, outputTokens);
     const runLimit =
       BigInt(this.manifest.scenario.budgets.runCostCentsMax) * 1_000_000n;
-    if (this.spentMicrocents > runLimit) {
+    if (spentMicrocents > runLimit) {
       violations.push(
-        `run cost ${this.spentMicrocents} exceeds limit ${runLimit} microcents`,
+        `run cost ${spentMicrocents} exceeds limit ${runLimit} microcents`,
       );
     }
-    return Object.freeze(violations);
+    const frozenViolations = Object.freeze(violations);
+    this.perAgentTickTokens.set(key, daily);
+    this.spentMicrocents = spentMicrocents;
+    this.accountedTurns.set(turn.turnId, {
+      inputTokens,
+      outputTokens,
+      violations: frozenViolations,
+    });
+    return frozenViolations;
   }
 
   async runTurn(turn: AgentTurnEnvelope): Promise<HermesTurnStats> {
-    const budgetBlock = this.preflightBudget(turn);
-    if (budgetBlock !== null) {
-      throw new HermesBudgetExceededError(turn, budgetBlock);
-    }
     const endpoint = this.endpoints.get(turn.agentId);
     if (endpoint === undefined) {
       throw new Error(`no isolated Hermes profile exists for ${turn.agentId}`);
@@ -472,56 +784,107 @@ export class HermesApiTurnDriver {
     if (!isLoopbackUrl(endpoint.baseUrl)) {
       throw new Error("Hermes Agent Lab endpoints must be loopback");
     }
-    const headers = {
-      authorization: `Bearer ${endpoint.apiKey}`,
-      "content-type": "application/json",
-      "idempotency-key": turn.turnId,
-      "x-hermes-session-id": endpoint.sessionId,
-      "x-hermes-session-key": endpoint.sessionKey,
-    };
-    const started = performance.now();
-    const response = await fetch(`${endpoint.baseUrl}/v1/runs`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        input: this.prompt,
-        instructions: this.prompt,
-        session_id: endpoint.sessionId,
-        model: endpoint.model,
-      }),
-    });
-    if (response.status !== 202) {
+    if (this.accountedTurns.has(turn.turnId)) {
       throw new Error(
-        `Hermes profile ${endpoint.profileId} rejected the turn with HTTP ${response.status}`,
+        `Hermes turn ${turn.turnId} is already accounted; refusing to re-drive it`,
       );
     }
-    const accepted = await response.json() as HermesRunStatus;
-    if (typeof accepted.run_id !== "string") {
-      throw new Error(`Hermes profile ${endpoint.profileId} returned no run_id`);
+    const budgetBlock = this.reserveBudget(turn);
+    if (budgetBlock !== null) {
+      throw new HermesBudgetExceededError(turn, budgetBlock);
     }
-    const deadline = Date.parse(turn.deadline);
-    for (;;) {
-      const statusResponse = await fetch(
-        `${endpoint.baseUrl}/v1/runs/${encodeURIComponent(accepted.run_id)}`,
-        { headers },
+    const started = performance.now();
+    let hermesRunId = `failed:${turn.turnId}`;
+    try {
+      const headers = {
+        authorization: `Bearer ${endpoint.apiKey}`,
+        "content-type": "application/json",
+        "idempotency-key": turn.turnId,
+        "x-hermes-session-id": endpoint.sessionId,
+        "x-hermes-session-key": endpoint.sessionKey,
+      };
+      const deadline = Date.parse(turn.deadline);
+      if (!Number.isFinite(deadline)) {
+        throw new Error(`Hermes turn ${turn.turnId} has an invalid decision deadline`);
+      }
+      const startedResponse = await readBeforeDeadline(
+        `${endpoint.baseUrl}/v1/runs`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            input: this.prompt,
+            instructions: this.prompt,
+            session_id: endpoint.sessionId,
+            model: endpoint.model,
+          }),
+        },
+        deadline,
+        "start",
       );
-      if (!statusResponse.ok) {
+      const response = startedResponse.response;
+      if (response.status !== 202) {
         throw new Error(
-          `Hermes run ${accepted.run_id} status failed with HTTP ${statusResponse.status}`,
+          `Hermes profile ${endpoint.profileId} rejected the turn with HTTP ${response.status}`,
         );
       }
-      const status = await statusResponse.json() as HermesRunStatus;
-      if (
-        status.status === "completed" ||
-        status.status === "failed" ||
-        status.status === "cancelled"
-      ) {
-        const tokens = usage(status);
-        return Object.freeze({
-          runId: accepted.run_id,
+      let accepted: HermesRunStatus | null;
+      try {
+        accepted = JSON.parse(
+          startedResponse.bodyText ?? "null",
+        ) as HermesRunStatus | null;
+      } catch {
+        accepted = null;
+      }
+      if (accepted === null || typeof accepted.run_id !== "string") {
+        try {
+          await endpoint.terminateProfile();
+        } catch (error) {
+          this.endpoints.delete(turn.agentId);
+          throw new Error(
+            `Hermes profile ${endpoint.profileId} returned no run_id; ` +
+              "isolated profile termination failed: " +
+              (error instanceof Error ? error.message : String(error)),
+          );
+        }
+        this.endpoints.delete(turn.agentId);
+        throw new Error(
+          `Hermes profile ${endpoint.profileId} returned no run_id; ` +
+            "isolated profile terminated",
+        );
+      }
+      const acceptedRunId = accepted.run_id;
+      hermesRunId = acceptedRunId;
+      const stopRun = async (): Promise<HermesTurnStats> => {
+        let stoppedUsage: HermesUsage | null = null;
+        const cleanupDeadline = Date.now() + HERMES_STOP_REQUEST_BUDGET_MS;
+        try {
+          const stopped = await readBeforeDeadline(
+            `${endpoint.baseUrl}/v1/runs/${encodeURIComponent(acceptedRunId)}/stop`,
+            { method: "POST", headers },
+            cleanupDeadline,
+            "stop",
+          );
+          if (stopped.response.ok && stopped.bodyText !== null) {
+            try {
+              stoppedUsage = usage(
+                JSON.parse(stopped.bodyText) as HermesRunStatus,
+              );
+            } catch {
+              // Missing or non-JSON stop evidence is charged conservatively below.
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof HermesRequestDeadlineError)) throw error;
+        }
+        const tokens = stoppedUsage ?? this.worstCaseUsage();
+        return validatedHermesTurnStats({
+          runId: hermesRunId,
+          turnId: turn.turnId,
+          opportunityKey: turn.opportunityKey,
           agentId: turn.agentId,
           targetTick: turn.targetTick,
-          status: status.status,
+          status: "cancelled",
           ...tokens,
           latencyMs: Math.max(0, Math.round(performance.now() - started)),
           budgetViolations: this.account(
@@ -529,26 +892,202 @@ export class HermesApiTurnDriver {
             tokens.inputTokens,
             tokens.outputTokens,
           ),
+          failure: stoppedUsage === null
+            ? "Hermes deadline cleanup had no valid usage; charged pinned worst case"
+            : "Hermes turn reached its decision deadline",
         });
+      };
+      const abandonRun = async (): Promise<void> => {
+        try {
+          await readBeforeDeadline(
+            `${endpoint.baseUrl}/v1/runs/${encodeURIComponent(acceptedRunId)}/stop`,
+            { method: "POST", headers },
+            Date.now() + HERMES_STOP_REQUEST_BUDGET_MS,
+            "stop",
+          );
+        } catch {
+          // Best effort: the failed turn is already charged the pinned worst case.
+        }
+      };
+      const remainingDecisionMs = Math.max(0, deadline - Date.now());
+      const cleanupReserveMs = Math.min(
+        HERMES_STOP_REQUEST_BUDGET_MS,
+        Math.floor(remainingDecisionMs / 2),
+      );
+      const pollingDeadline = deadline - cleanupReserveMs;
+      let consecutivePollFailures = 0;
+      for (;;) {
+        if (Date.now() >= pollingDeadline) return await stopRun();
+        let terminalStatus: HermesTerminalStatus | undefined;
+        try {
+          const statusResult = await readBeforeDeadline(
+            `${endpoint.baseUrl}/v1/runs/${encodeURIComponent(acceptedRunId)}`,
+            { headers },
+            pollingDeadline,
+            "status",
+          );
+          const statusResponse = statusResult.response;
+          if (!statusResponse.ok) {
+            const message =
+              `Hermes run ${acceptedRunId} status failed with HTTP ${statusResponse.status}`;
+            if (
+              statusResponse.status === 408 ||
+              statusResponse.status === 425 ||
+              statusResponse.status === 429 ||
+              statusResponse.status >= 500
+            ) {
+              throw new HermesTransientPollError(message);
+            }
+            throw new HermesPollProtocolError(message);
+          }
+          let status: HermesRunStatus | null;
+          try {
+            status = JSON.parse(
+              statusResult.bodyText ?? "null",
+            ) as HermesRunStatus | null;
+          } catch {
+            throw new HermesPollProtocolError(
+              `Hermes run ${acceptedRunId} returned an unreadable status body`,
+            );
+          }
+          if (status === null || typeof status !== "object") {
+            throw new HermesPollProtocolError(
+              `Hermes run ${acceptedRunId} returned an unreadable status body`,
+            );
+          }
+          consecutivePollFailures = 0;
+          if (
+            status.status === "completed" ||
+            status.status === "failed" ||
+            status.status === "cancelled"
+          ) {
+            terminalStatus = status as HermesTerminalStatus;
+          }
+        } catch (error) {
+          if (error instanceof HermesRequestDeadlineError) return await stopRun();
+          if (
+            !(error instanceof HermesPollProtocolError) &&
+            ++consecutivePollFailures <= HERMES_MAX_CONSECUTIVE_POLL_FAILURES &&
+            Date.now() < pollingDeadline
+          ) {
+            const remainingPollingMs = pollingDeadline - Date.now();
+            await new Promise<void>((resolve) => setTimeout(
+              resolve,
+              Math.min(HERMES_POLL_INTERVAL_MS, remainingPollingMs),
+            ));
+            continue;
+          }
+          await abandonRun();
+          throw error;
+        }
+        if (terminalStatus !== undefined) {
+          const observedUsage = usage(terminalStatus);
+          const tokens = observedUsage ?? this.worstCaseUsage();
+          const terminalFailure = terminalStatus.status === "completed"
+            ? undefined
+            : typeof terminalStatus.error === "string" &&
+                terminalStatus.error.length > 0
+              ? redactSecrets(
+                  terminalStatus.error,
+                  this.turnSecrets(endpoint),
+                ).slice(0, 1_000)
+              : `Hermes run terminated with status ${terminalStatus.status}`;
+          const missingUsageFailure =
+            "Hermes terminal status omitted valid usage; charged pinned worst case";
+          const budgetViolations = this.account(
+            turn,
+            tokens.inputTokens,
+            tokens.outputTokens,
+          );
+          return validatedHermesTurnStats({
+            runId: hermesRunId,
+            turnId: turn.turnId,
+            opportunityKey: turn.opportunityKey,
+            agentId: turn.agentId,
+            targetTick: turn.targetTick,
+            status: observedUsage === null ? "failed" : terminalStatus.status,
+            ...tokens,
+            latencyMs: Math.max(0, Math.round(performance.now() - started)),
+            budgetViolations,
+            ...(observedUsage === null
+              ? {
+                  failure: (
+                    missingUsageFailure +
+                    (
+                      terminalFailure === undefined
+                        ? ""
+                        : `: ${terminalFailure}`
+                    )
+                  ).slice(0, 1_000),
+                }
+              : terminalFailure === undefined
+                ? {}
+                : { failure: terminalFailure }),
+          });
+        }
+        const remainingPollingMs = pollingDeadline - Date.now();
+        if (remainingPollingMs <= 0) return await stopRun();
+        await new Promise<void>((resolve) => setTimeout(
+          resolve,
+          Math.min(HERMES_POLL_INTERVAL_MS, remainingPollingMs),
+        ));
       }
-      if (Date.now() > deadline) {
-        await fetch(
-          `${endpoint.baseUrl}/v1/runs/${encodeURIComponent(accepted.run_id)}/stop`,
-          { method: "POST", headers },
+    } catch (error) {
+      const tokens = this.worstCaseUsage();
+      const detail = redactSecrets(
+        error instanceof Error ? error.message : String(error),
+        this.turnSecrets(endpoint),
+      ).slice(0, 1_000);
+      let failureDetail = detail;
+      let budgetViolations: readonly string[];
+      try {
+        budgetViolations = this.account(
+          turn,
+          tokens.inputTokens,
+          tokens.outputTokens,
         );
-        return Object.freeze({
-          runId: accepted.run_id,
-          agentId: turn.agentId,
-          targetTick: turn.targetTick,
-          status: "cancelled",
-          inputTokens: 0,
-          outputTokens: 0,
-          latencyMs: Math.max(0, Math.round(performance.now() - started)),
-          budgetViolations: [],
-        });
+      } catch (accountingError) {
+        const accountingDetail = redactSecrets(
+          accountingError instanceof Error
+            ? accountingError.message
+            : String(accountingError),
+          this.turnSecrets(endpoint),
+        );
+        budgetViolations =
+          this.accountedTurns.get(turn.turnId)?.violations ?? Object.freeze([]);
+        failureDetail = (
+          `${detail}; accounting failed: ${accountingDetail}`
+        ).slice(0, 1_000);
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      throw new HermesTurnExecutionError(validatedHermesTurnStats({
+        runId: hermesRunId,
+        turnId: turn.turnId,
+        opportunityKey: turn.opportunityKey,
+        agentId: turn.agentId,
+        targetTick: turn.targetTick,
+        status: "failed",
+        ...tokens,
+        latencyMs: Math.max(0, Math.round(performance.now() - started)),
+        budgetViolations,
+        failure: failureDetail,
+      }), failureDetail);
+    } finally {
+      this.releaseBudgetReservation(turn.turnId);
     }
+  }
+}
+
+export class HermesTurnExecutionError extends Error {
+  constructor(
+    private readonly stats: HermesTurnStats,
+    detail: string,
+  ) {
+    super(`Hermes turn ${stats.runId} failed: ${detail}`);
+    this.name = "HermesTurnExecutionError";
+  }
+
+  asStats(): HermesTurnStats {
+    return this.stats;
   }
 }
 
@@ -562,8 +1101,10 @@ export class HermesBudgetExceededError extends Error {
   }
 
   asStats(): HermesTurnStats {
-    return Object.freeze({
+    return validatedHermesTurnStats({
       runId: `budget:${this.turn.turnId}`,
+      turnId: this.turn.turnId,
+      opportunityKey: this.turn.opportunityKey,
       agentId: this.turn.agentId,
       targetTick: this.turn.targetTick,
       status: "cancelled",

@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import {
+  AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX,
   agentActionSchema,
   agentScopedObservationSchema,
   canonicalStringify,
@@ -59,6 +60,7 @@ export const TIER2_DECISION_KINDS = [
   "job_response",
   "loan_officer_adjustment",
   "goal_activation",
+  "goal_commitment",
 ] as const;
 export type Tier2DecisionKind = (typeof TIER2_DECISION_KINDS)[number];
 
@@ -85,6 +87,9 @@ export interface PreparedTier2Decision {
 export interface PreparedTier2DecisionBatch {
   readonly tick: number;
   readonly entries: readonly PreparedTier2Decision[];
+  readonly agentLabOpportunityFixtureVersion?: NonNullable<
+    RunManifestAgentLab["opportunityFixture"]
+  >["version"];
 }
 
 interface EvidenceEventRow {
@@ -101,6 +106,9 @@ interface Tier2ApplyState {
   readonly goals: GoalLifecycleEngine<Record<string, never>>;
   readonly tickContext: TickContext;
   readonly emit: TickContext["emit"];
+  readonly agentLabOpportunityFixtureVersion?: NonNullable<
+    RunManifestAgentLab["opportunityFixture"]
+  >["version"];
   readonly opportunityByDecision: Map<string, PreparedTier2Decision>;
   readonly rationaleByDecision: Map<string, string>;
   readonly laborByApplication: Map<string, {
@@ -184,9 +192,14 @@ const activateGoalParamsSchema = z.object({
   goalId: z.string().regex(/^gol_[0-9a-z]{8}$/),
 }).strict();
 
+const reaffirmGoalParamsSchema = z.object({
+  agentId: z.string().regex(/^agt_[0-9a-z]{8}$/),
+  goalId: z.string().regex(/^gol_[0-9a-z]{8}$/),
+}).strict();
+
 const deferGoalParamsSchema = z.object({
   agentId: z.string().regex(/^agt_[0-9a-z]{8}$/),
-  reason: z.literal("defer_activation"),
+  reason: z.enum(["defer_activation", "defer_progress"]),
 }).strict();
 
 function compareCodeUnit(left: string, right: string): number {
@@ -361,10 +374,35 @@ function goalOptions(
   return Object.freeze(options);
 }
 
+function goalCommitmentOptions(
+  agentId: string,
+  goalId: string,
+  priority: number,
+): readonly DecisionOption[] {
+  const reaffirmUtility = Math.max(1, priority * 10);
+  return Object.freeze([
+    option({
+      actionId: "goal.reaffirm",
+      actionType: "agent.reaffirm_goal",
+      params: { agentId, goalId },
+      utility: reaffirmUtility,
+      utilityFactors: { goalPriority: reaffirmUtility },
+    }),
+    option({
+      actionId: "goal.defer",
+      actionType: "agent.defer_goal",
+      params: { agentId, reason: "defer_progress" },
+      utility: 0,
+      utilityFactors: { deferBaseline: 0 },
+    }),
+  ]);
+}
+
 export function discoverTier2DecisionOpportunities(
   db: WorldDatabase,
   runId: string,
   tick: number,
+  agentLab?: RunManifestAgentLab,
 ): readonly Tier2DecisionOpportunity[] {
   if (!Number.isSafeInteger(tick) || tick < 1) {
     throw new EngineError("VALIDATION_FAILED", "Tier-2 discovery tick must be positive");
@@ -562,6 +600,67 @@ export function discoverTier2DecisionOpportunities(
     }
   }
 
+  if (agentLab?.opportunityFixture?.ticks.includes(tick)) {
+    const agentsById = new Map(
+      agents.listAgentEntities().map((agent) => [agent.id, agent]),
+    );
+    for (const assignment of agentLab.resolvedAssignments) {
+      const agent = agentsById.get(assignment.agentId);
+      // A drifted fixture slot must not discard unrelated Tier-2 work already
+      // discovered for this tick. The harness records the missing turn and the
+      // pinned citizen/tick matrix makes the trial release-ineligible.
+      if (agent === undefined) continue;
+      if (!agent.aliveFlags.alive || !agent.aliveFlags.canAct) continue;
+      if (agent.quarantine.mode === "tier1_only" && tick <= agent.quarantine.untilTick) {
+        continue;
+      }
+      const records = agents.listByAgent(agent.id)
+        .filter((record) => (
+          record.goal.status === "active" ||
+          record.goal.status === "dormant"
+        ))
+        .sort((left, right) => compareCodeUnit(left.goal.id, right.goal.id));
+      const selected = records.find((record) => record.goal.status === "active") ??
+        records[0];
+      if (selected === undefined) continue;
+      const context = profileContext(agents, agent.id);
+      opportunities.push(freezeOpportunity({
+        key: (
+          `${AGENT_LAB_GOAL_COMMITMENT_OPPORTUNITY_PREFIX}` +
+          `${agent.id}:${selected.goal.id}:${tick}`
+        ),
+        kind: "goal_commitment",
+        purpose: "decision.tier2.goal_commitment",
+        agentId: agent.id,
+        persona: context.persona,
+        trigger: {
+          kind: "goal",
+          agentId: agent.id,
+          sourceEventId: selected.triggerEventId,
+          tick,
+          priority: selected.goal.priority,
+          payload: {
+            goalId: selected.goal.id,
+            goalKind: selected.goal.kind,
+          },
+        },
+        trustedState: {
+          decisionKind: "goal_commitment",
+          fixtureVersion: agentLab.opportunityFixture.version,
+          selectedGoal: selected.goal,
+          evidenceRefs: [selected.triggerEventId],
+        },
+        untrustedItems: context.untrustedItems,
+        options: goalCommitmentOptions(
+          agent.id,
+          selected.goal.id,
+          selected.goal.priority,
+        ),
+        budgetTag: "goal_commitment",
+      }));
+    }
+  }
+
   return Object.freeze(opportunities.sort((left, right) => compareCodeUnit(left.key, right.key)));
 }
 
@@ -576,7 +675,12 @@ export async function prepareTier2DecisionBatch(input: {
   readonly opportunities?: readonly Tier2DecisionOpportunity[];
 }): Promise<PreparedTier2DecisionBatch> {
   const opportunities = input.opportunities ??
-    discoverTier2DecisionOpportunities(input.db, input.runId, input.tick);
+    discoverTier2DecisionOpportunities(
+      input.db,
+      input.runId,
+      input.tick,
+      input.agentLab,
+    );
   const agentStore = new SqliteAgentStore(input.db, input.runId);
   const entries: PreparedTier2Decision[] = [];
   // Sequential gateway access keeps budget events and threshold transitions in
@@ -742,7 +846,16 @@ export async function prepareTier2DecisionBatch(input: {
     }
     entries.push(Object.freeze({ opportunity, prompt, route, result }));
   }
-  return Object.freeze({ tick: input.tick, entries: Object.freeze(entries) });
+  return Object.freeze({
+    tick: input.tick,
+    entries: Object.freeze(entries),
+    ...(input.agentLab?.opportunityFixture === undefined
+      ? {}
+      : {
+          agentLabOpportunityFixtureVersion:
+            input.agentLab.opportunityFixture.version,
+        }),
+  });
 }
 
 function eventId(value: EventEnvelope | string | void): string | undefined {
@@ -778,6 +891,100 @@ function requiredPrepared(
     throw new EngineError("PERMISSION_DENIED", "action is not attached to an offered decision");
   }
   return prepared;
+}
+
+function requiredGoalCommitmentFixtureVersion(
+  state: Tier2ApplyState,
+  prepared: PreparedTier2Decision,
+): string {
+  const trustedState = prepared.opportunity.trustedState as Readonly<
+    Record<string, unknown>
+  >;
+  const fixtureVersion = trustedState["fixtureVersion"];
+  if (
+    typeof fixtureVersion !== "string" ||
+    state.agentLabOpportunityFixtureVersion === undefined ||
+    fixtureVersion !== state.agentLabOpportunityFixtureVersion
+  ) {
+    throw new EngineError(
+      "CONFLICT",
+      "goal-commitment decision has an unexpected fixture version",
+    );
+  }
+  return fixtureVersion;
+}
+
+function requiredGoalCommitmentGoalId(
+  prepared: PreparedTier2Decision,
+): string {
+  const trustedState = prepared.opportunity.trustedState as Readonly<
+    Record<string, unknown>
+  >;
+  const selectedGoal = trustedState["selectedGoal"];
+  if (
+    typeof selectedGoal !== "object" ||
+    selectedGoal === null ||
+    Array.isArray(selectedGoal) ||
+    typeof (selectedGoal as Readonly<Record<string, unknown>>)["id"] !== "string"
+  ) {
+    throw new EngineError(
+      "CONFLICT",
+      "goal-commitment decision is missing its selected goal",
+    );
+  }
+  return (selectedGoal as Readonly<Record<string, string>>)["id"]!;
+}
+
+function recordGoalCommitment(
+  state: Tier2ApplyState,
+  prepared: PreparedTier2Decision,
+  decisionId: string,
+  agentId: string,
+  goalId: string,
+  actionType: "agent.reaffirm_goal" | "agent.defer_goal",
+): string {
+  if (
+    prepared.opportunity.kind !== "goal_commitment" ||
+    agentId !== prepared.opportunity.agentId
+  ) {
+    throw new EngineError(
+      "PERMISSION_DENIED",
+      "decision is not this agent's goal-commitment choice",
+    );
+  }
+  const fixtureVersion = requiredGoalCommitmentFixtureVersion(state, prepared);
+  const current = state.agentStore.get(goalId);
+  if (
+    current === null ||
+    current.goal.agentId !== agentId ||
+    (
+      current.goal.status !== "active" &&
+      current.goal.status !== "dormant"
+    )
+  ) {
+    throw new EngineError(
+      "CONFLICT",
+      "the offered goal is no longer available for this agent",
+    );
+  }
+  return state.emit(
+    "agent.goal.commitment_recorded",
+    {
+      agentId,
+      goalId: current.goal.id,
+      kind: current.goal.kind,
+      status: current.goal.status,
+      progress: current.goal.progress,
+      fixtureVersion,
+      actionType,
+      opportunityKey: prepared.opportunity.key,
+    },
+    {
+      actor: { kind: "agent", id: agentId },
+      correlationId: decisionId,
+      causationId: prepared.opportunity.trigger.sourceEventId,
+    },
+  ).eventId;
 }
 
 function createActionRegistry(state: Tier2ApplyState): ActionRegistry<Tier2ApplyState> {
@@ -930,13 +1137,57 @@ function createActionRegistry(state: Tier2ApplyState): ActionRegistry<Tier2Apply
   );
 
   registry.registerActionType(
+    "agent.reaffirm_goal",
+    reaffirmGoalParamsSchema,
+    () => true,
+    (params, context, intent) => {
+      const prepared = requiredPrepared(context.state, intent.decisionId);
+      const eventId = recordGoalCommitment(
+        context.state,
+        prepared,
+        intent.decisionId!,
+        params.agentId,
+        params.goalId,
+        "agent.reaffirm_goal",
+      );
+      return { eventIds: [eventId] };
+    },
+  );
+
+  registry.registerActionType(
     "agent.defer_goal",
     deferGoalParamsSchema,
     () => true,
     (params, context, intent) => {
       const prepared = requiredPrepared(context.state, intent.decisionId);
-      if (prepared.opportunity.kind !== "goal_activation" || params.agentId !== prepared.opportunity.agentId) {
+      if (
+        (
+          prepared.opportunity.kind !== "goal_activation" &&
+          prepared.opportunity.kind !== "goal_commitment"
+        ) ||
+        params.agentId !== prepared.opportunity.agentId
+      ) {
         throw new EngineError("PERMISSION_DENIED", "decision is not this agent's goal choice");
+      }
+      const expectedReason = prepared.opportunity.kind === "goal_activation"
+        ? "defer_activation"
+        : "defer_progress";
+      if (params.reason !== expectedReason) {
+        throw new EngineError(
+          "PERMISSION_DENIED",
+          "defer reason does not match the offered goal decision",
+        );
+      }
+      if (prepared.opportunity.kind === "goal_commitment") {
+        const eventId = recordGoalCommitment(
+          context.state,
+          prepared,
+          intent.decisionId!,
+          params.agentId,
+          requiredGoalCommitmentGoalId(prepared),
+          "agent.defer_goal",
+        );
+        return { eventIds: [eventId] };
       }
       return { eventIds: [] };
     },
@@ -1008,6 +1259,12 @@ export function createTier2DecisionPhaseHandler(
         goals: new GoalLifecycleEngine<Record<string, never>>({ repository: agentStore }),
         tickContext: ctx,
         emit: ctx.emit,
+        ...(batch.agentLabOpportunityFixtureVersion === undefined
+          ? {}
+          : {
+              agentLabOpportunityFixtureVersion:
+                batch.agentLabOpportunityFixtureVersion,
+            }),
         opportunityByDecision: new Map(),
         rationaleByDecision: new Map(),
         laborByApplication: new Map(),

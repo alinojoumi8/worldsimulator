@@ -22,11 +22,13 @@ import {
 } from "node:path";
 import Database from "better-sqlite3";
 import {
+  agentLabScenarioSchema,
   canonicalParse,
   canonicalStringify,
   EVENT_SCHEMA_VERSION,
   EngineError,
   IdFactory,
+  runManifestAgentLabSchema,
   runIdSchema,
   sha256Hex,
   simulationIdSchema,
@@ -39,6 +41,11 @@ import { SqliteEventStore } from "./event-store";
 
 const SNAPSHOT_ID_PATTERN = /^snap_[0-9a-z]{8,}$/;
 const STATE_HASH_PATTERN = /^[0-9a-f]{64}$/;
+// Preserve the released standard Riverbend hash receipt while keeping Agent
+// Lab manifests in a separate version namespace. Bump each constant only when
+// that family's authoritative projection changes.
+const STANDARD_STATE_HASH_VERSION = 27;
+const AGENT_LAB_STATE_HASH_VERSION = 12_001;
 
 interface LogicalRunRow {
   current_tick: bigint;
@@ -232,17 +239,130 @@ function parseCanonical(text: string, field: string): unknown {
   }
 }
 
-function logicalManifest(text: string): Record<string, unknown> {
-  const parsed = parseCanonical(text, "run manifest");
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new EngineError("INTERNAL", "persisted run manifest is not an object");
+interface LogicalAgentLabProjection {
+  readonly provenance: Readonly<Record<string, unknown>>;
+  readonly state: Readonly<Record<string, unknown>>;
+}
+
+function logicalAgentLabProjection(
+  container: Readonly<Record<string, unknown>>,
+  field: string,
+  source: "manifest" | "scenario",
+): LogicalAgentLabProjection | undefined {
+  if (!Object.hasOwn(container, "agentLab")) return undefined;
+  const value = container["agentLab"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new EngineError(
+      "INTERNAL",
+      `persisted ${field} Agent Lab configuration is not an object`,
+      {
+        field,
+        source,
+        valueType: value === null
+          ? "null"
+          : Array.isArray(value)
+            ? "array"
+            : typeof value,
+      },
+    );
   }
-  const manifest = { ...(parsed as Record<string, unknown>) };
+  try {
+    const parsed = source === "manifest"
+      ? runManifestAgentLabSchema.parse(value)
+      : agentLabScenarioSchema.parse(value);
+    // Start from the strict schema output, never the raw persisted object. New
+    // authenticated scenario fields therefore remain part of provenance, while
+    // this deny-list removes only manifest-only materialized state.
+    const provenance = {
+      ...(parsed as Readonly<Record<string, unknown>>),
+    } as Record<string, unknown>;
+    delete provenance["resolvedAssignments"];
+    return {
+      provenance,
+      // Controller identity and experiment IDs are provenance, not world
+      // state. A manifested fixture changes which authoritative Tier-2
+      // opportunities execute and therefore remains in the logical hash.
+      state: parsed.opportunityFixture === undefined
+        ? {}
+        : { opportunityFixture: parsed.opportunityFixture },
+    };
+  } catch (error) {
+    throw new EngineError(
+      "INTERNAL",
+      `persisted ${field} Agent Lab configuration is invalid`,
+      {
+        field,
+        source,
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+}
+
+interface LogicalContainerProjection {
+  readonly value: Record<string, unknown>;
+  readonly hasAgentLab: boolean;
+  readonly agentLabProvenance: Readonly<Record<string, unknown>> | undefined;
+  readonly agentLabState: Readonly<Record<string, unknown>> | undefined;
+}
+
+type LogicalManifestProjection = Omit<
+  LogicalContainerProjection,
+  "agentLabState"
+>;
+
+function logicalContainer(
+  text: string,
+  field: string,
+  omittedKeys: readonly string[],
+  source: "manifest" | "scenario",
+): LogicalContainerProjection {
+  const parsed = parseCanonical(text, field);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new EngineError("INTERNAL", `persisted ${field} is not an object`);
+  }
+  const value = { ...(parsed as Record<string, unknown>) };
+  const agentLab = logicalAgentLabProjection(value, field, source);
+  const hasAgentLab = agentLab !== undefined;
+  for (const key of omittedKeys) delete value[key];
+  return {
+    value,
+    hasAgentLab,
+    agentLabProvenance: agentLab?.provenance,
+    agentLabState: agentLab?.state,
+  };
+}
+
+function logicalManifest(text: string): LogicalManifestProjection {
   // Run identity and wall-clock provenance must not make equal seeded worlds hash differently.
-  delete manifest["runId"];
-  delete manifest["simulationId"];
-  delete manifest["createdWall"];
-  return manifest;
+  // Agent Lab identity/controller configuration is experiment provenance,
+  // not authoritative world state. Sidecar-only shadow instrumentation must
+  // remain comparable with its same-seed native control.
+  const logical = logicalContainer(text, "run manifest", [
+    "runId",
+    "simulationId",
+    "createdWall",
+    "agentLab",
+  ], "manifest");
+  // The full scenario digest legitimately differs across native and shadow
+  // Agent Lab arms because it includes controller-only experiment metadata.
+  // Provenance equality is enforced separately before hashing, while standard
+  // runs retain scenarioDigest as authoritative input.
+  if (logical.hasAgentLab) delete logical.value["scenarioDigest"];
+  return {
+    value: logical.value,
+    hasAgentLab: logical.hasAgentLab,
+    agentLabProvenance: logical.agentLabProvenance,
+  };
+}
+
+function logicalScenario(text: string): LogicalContainerProjection {
+  return logicalContainer(
+    text,
+    "simulation scenario",
+    ["agentLab"],
+    "scenario",
+  );
 }
 
 /**
@@ -271,6 +391,32 @@ function logicalStateHash(
   `).get(runId);
   if (!run) throw new EngineError("NOT_FOUND", `run ${runId} does not exist`);
 
+  const scenario = logicalScenario(run.scenario_canonical);
+  const manifest = logicalManifest(run.manifest_canonical);
+  if (manifest.hasAgentLab !== scenario.hasAgentLab) {
+    throw new EngineError(
+      "INTERNAL",
+      "persisted run manifest and simulation scenario disagree on Agent Lab presence",
+      {
+        manifestHasAgentLab: manifest.hasAgentLab,
+        scenarioHasAgentLab: scenario.hasAgentLab,
+      },
+    );
+  }
+  if (
+    scenario.hasAgentLab &&
+    canonicalStringify(manifest.agentLabProvenance) !==
+      canonicalStringify(scenario.agentLabProvenance)
+  ) {
+    throw new EngineError(
+      "INTERNAL",
+      "persisted run manifest and simulation scenario disagree on Agent Lab provenance content",
+      {
+        manifestAgentLabProvenance: manifest.agentLabProvenance,
+        scenarioAgentLabProvenance: scenario.agentLabProvenance,
+      },
+    );
+  }
   const scheduledTasks = db.prepare<[string], ScheduledTaskStateRow>(`
     SELECT id, due_tick, task_order, task_ref, payload_canonical, fired_tick
     FROM scheduled_tasks
@@ -866,11 +1012,16 @@ function logicalStateHash(
   };
 
   return sha256Hex(canonicalStringify({
-    stateHashVersion: 27,
+    stateHashVersion: scenario.hasAgentLab
+      ? AGENT_LAB_STATE_HASH_VERSION
+      : STANDARD_STATE_HASH_VERSION,
     tick: toSafeNumber(run.current_tick, "run current tick"),
     endTick: toSafeNumber(run.end_tick, "run end tick"),
-    scenario: parseCanonical(run.scenario_canonical, "simulation scenario"),
-    manifest: logicalManifest(run.manifest_canonical),
+    scenario: scenario.value,
+    manifest: manifest.value,
+    ...(scenario.agentLabState === undefined
+      ? {}
+      : { agentLab: scenario.agentLabState }),
     idState:
       idStateOverride ?? parseCanonical(run.id_state_canonical, "run ID checkpoint"),
     scheduledTasks,

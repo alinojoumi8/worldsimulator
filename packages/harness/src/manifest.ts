@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   AGENT_LAB_MCP_TOOL_DEFINITIONS,
   canonicalStringify,
+  compareCodeUnit,
   experimentManifestSchema,
   sha256Hex,
   type AgentLabMode,
@@ -10,6 +11,7 @@ import {
 } from "@worldtangle/shared";
 import {
   agentLabDriverPolicyDigest,
+  agentLabLegacyDriverPolicyDigest,
   agentLabPromptDigest,
   agentLabToolSchemaDigest,
 } from "./driver-policy";
@@ -21,10 +23,6 @@ export interface TrialPlan {
   readonly mode: AgentLabMode;
   readonly seed: number;
   readonly attempt: number;
-}
-
-function compareCodeUnit(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 const FORBIDDEN_MANIFEST_KEYS = new Set([
@@ -73,9 +71,100 @@ export function experimentManifestDigest(manifest: ExperimentManifest): string {
   return sha256Hex(canonicalStringify(manifest));
 }
 
-export function validateExperimentManifest(input: unknown): ExperimentManifest {
+interface ParsedExperimentManifest {
+  readonly manifest: ExperimentManifest;
+  readonly sourceSchemaVersion: 1 | 2;
+}
+
+const LEGACY_UNPINNED_RUNTIME_VERSION = "unavailable-in-schema-v1";
+const SCHEMA_V2_RUNTIME_PIN_KEYS = Object.freeze([
+  "hermesMcpSdkVersion",
+  "hermesStarletteVersion",
+  "hermesAiohttpVersion",
+] as const);
+
+function parseExperimentManifest(
+  input: unknown,
+  allowSchemaV1: boolean,
+): ParsedExperimentManifest {
+  if (
+    !allowSchemaV1 ||
+    typeof input !== "object" ||
+    input === null ||
+    Array.isArray(input) ||
+    (input as Readonly<Record<string, unknown>>)["schemaVersion"] !== 1
+  ) {
+    return Object.freeze({
+      manifest: experimentManifestSchema.parse(input),
+      sourceSchemaVersion: 2,
+    });
+  }
+  const record = input as Readonly<Record<string, unknown>>;
+  const scenario = record["scenario"];
+  const provider = record["provider"];
+  if (
+    typeof scenario !== "object" ||
+    scenario === null ||
+    Array.isArray(scenario) ||
+    Object.hasOwn(scenario, "opportunityFixture")
+  ) {
+    throw new Error(
+      "schema-v1 experiment scenario cannot contain opportunityFixture",
+    );
+  }
+  if (
+    typeof provider !== "object" ||
+    provider === null ||
+    Array.isArray(provider)
+  ) {
+    throw new Error("schema-v1 experiment provider must be an object");
+  }
+  const providerRecord = provider as Readonly<Record<string, unknown>>;
+  const settings = providerRecord["settings"];
+  if (
+    typeof settings !== "object" ||
+    settings === null ||
+    Array.isArray(settings)
+  ) {
+    throw new Error("schema-v1 experiment provider settings must be an object");
+  }
+  const settingsRecord = settings as Readonly<Record<string, unknown>>;
+  const unsupportedPin = SCHEMA_V2_RUNTIME_PIN_KEYS.find((key) =>
+    Object.hasOwn(settingsRecord, key)
+  );
+  if (unsupportedPin !== undefined) {
+    throw new Error(
+      `schema-v1 experiment provider cannot contain ${unsupportedPin}`,
+    );
+  }
+  const migrated = experimentManifestSchema.parse({
+    ...record,
+    schemaVersion: 2,
+    scenario: { ...scenario },
+    provider: {
+      ...providerRecord,
+      settings: {
+        ...settingsRecord,
+        hermesMcpSdkVersion: LEGACY_UNPINNED_RUNTIME_VERSION,
+        hermesStarletteVersion: LEGACY_UNPINNED_RUNTIME_VERSION,
+        hermesAiohttpVersion: LEGACY_UNPINNED_RUNTIME_VERSION,
+      },
+    },
+  });
+  return Object.freeze({
+    manifest: migrated,
+    sourceSchemaVersion: 1,
+  });
+}
+
+function validateExperimentManifestWithPolicy(
+  input: unknown,
+  allowLegacyDriverPolicy: boolean,
+  allowSchemaV1: boolean,
+): ParsedExperimentManifest {
   assertNoCredentialMaterial(input);
-  const manifest = experimentManifestSchema.parse(input);
+  const parsed = parseExperimentManifest(input, allowSchemaV1);
+  const manifest = parsed.manifest;
   if (manifest.provider.family !== "hermes") {
     throw new Error("Agent Lab harness requires the Hermes provider family");
   }
@@ -86,6 +175,9 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
     "hermesVersion",
     "hermesPythonVersion",
     "hermesOpenAiSdkVersion",
+    "hermesMcpSdkVersion",
+    "hermesStarletteVersion",
+    "hermesAiohttpVersion",
     "providerEnvAllowlist",
   ]);
   const unknownProviderSetting = Object.keys(manifest.provider.settings).find(
@@ -122,6 +214,9 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
     "hermesVersion",
     "hermesPythonVersion",
     "hermesOpenAiSdkVersion",
+    "hermesMcpSdkVersion",
+    "hermesStarletteVersion",
+    "hermesAiohttpVersion",
   ] as const) {
     const value = manifest.provider.settings[key];
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -131,8 +226,23 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
   if (agentLabPromptDigest(manifest.prompt.bytes) !== manifest.prompt.digest) {
     throw new Error("experiment prompt bytes do not match their pinned digest");
   }
-  if (agentLabDriverPolicyDigest(manifest.generationBudget) !== manifest.driverPolicyDigest) {
-    throw new Error("experiment driver policy does not match its pinned digest");
+  const currentDriverPolicyDigest = agentLabDriverPolicyDigest(
+    manifest.generationBudget,
+  );
+  if (manifest.driverPolicyDigest !== currentDriverPolicyDigest) {
+    const legacyDriverPolicyDigest = agentLabLegacyDriverPolicyDigest(
+      manifest.generationBudget,
+    );
+    if (
+      !allowLegacyDriverPolicy ||
+      manifest.driverPolicyDigest !== legacyDriverPolicyDigest
+    ) {
+      throw new Error(
+        allowLegacyDriverPolicy
+          ? "experiment driver policy does not match a supported archive digest"
+          : "experiment driver policy must match the current stable_driver_v2 digest",
+      );
+    }
   }
   const definitions = new Map(
     AGENT_LAB_MCP_TOOL_DEFINITIONS.map((tool) => [tool.name, tool.inputSchema]),
@@ -152,10 +262,39 @@ export function validateExperimentManifest(input: unknown): ExperimentManifest {
   if (combinedDigest !== agentLabToolSchemaDigest()) {
     throw new Error("experiment combined Agent Lab tool schema digest drifted");
   }
-  return manifest;
+  return parsed;
 }
 
-export function loadExperimentManifest(path: string): ExperimentManifest {
+export function validateExperimentManifest(input: unknown): ExperimentManifest {
+  return validateExperimentManifestWithPolicy(input, false, false).manifest;
+}
+
+export interface ArchivedExperimentManifestValidation {
+  readonly manifest: ExperimentManifest;
+  readonly driverPolicyVersion: "stable_driver_v1" | "stable_driver_v2";
+  readonly sourceSchemaVersion: 1 | 2;
+}
+
+export function validateArchivedExperimentManifest(
+  input: unknown,
+): ArchivedExperimentManifestValidation {
+  const parsed = validateExperimentManifestWithPolicy(input, true, true);
+  const manifest = parsed.manifest;
+  return Object.freeze({
+    manifest,
+    sourceSchemaVersion: parsed.sourceSchemaVersion,
+    driverPolicyVersion:
+      manifest.driverPolicyDigest ===
+        agentLabDriverPolicyDigest(manifest.generationBudget)
+        ? "stable_driver_v2"
+        : "stable_driver_v1",
+  });
+}
+
+export function loadExperimentManifest(
+  path: string,
+  options: Readonly<{ allowArchivedDriverPolicy?: boolean }> = {},
+): ExperimentManifest {
   const absolute = resolve(path);
   let parsed: unknown;
   try {
@@ -166,7 +305,9 @@ export function loadExperimentManifest(path: string): ExperimentManifest {
         (error instanceof Error ? error.message : String(error)),
     );
   }
-  return validateExperimentManifest(parsed);
+  return options.allowArchivedDriverPolicy === true
+    ? validateArchivedExperimentManifest(parsed).manifest
+    : validateExperimentManifest(parsed);
 }
 
 export function planTrials(manifest: ExperimentManifest): readonly TrialPlan[] {

@@ -1,9 +1,12 @@
 import {
+  AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
   AGENT_LAB_MCP_TOOL_DEFINITIONS,
   AGENT_LAB_MCP_TOOL_NAMES,
+  AGENT_LAB_PILOT_FIXTURE_TICKS,
   canonicalStringify,
   sha256Hex,
   type AgentLabBudget,
+  type AgentLabOpportunityFixture,
 } from "@worldtangle/shared";
 
 export const CITIZEN_TURN_PROMPT = [
@@ -19,13 +22,58 @@ export const CITIZEN_TURN_PROMPT = [
   "Do not reveal hidden reasoning. Put only a short decision rationale in the submission.",
 ].join("\n");
 
+export const MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK = 32;
+const DRIVER_DISABLED_CAPABILITIES = Object.freeze([
+  "browser",
+  "code_execution",
+  "delegation",
+  "filesystem",
+  "general_mcp_resources",
+  "general_mcp_prompts",
+  "memory_write",
+  "shell",
+  "web",
+]);
+
+export function agentLabPilotOpportunityFixture(): AgentLabOpportunityFixture {
+  return {
+    version: AGENT_LAB_GOAL_COMMITMENT_FIXTURE_VERSION,
+    ticks: [...AGENT_LAB_PILOT_FIXTURE_TICKS],
+  };
+}
+
 export function agentLabDriverPolicy(budget: AgentLabBudget) {
+  return Object.freeze({
+    protocolVersion: "wt.agent-lab.v1",
+    policyVersion: "stable_driver_v2",
+    canonicalObservationWins: true,
+    allowedTools: Object.freeze([...AGENT_LAB_MCP_TOOL_NAMES]),
+    disabledCapabilities: DRIVER_DISABLED_CAPABILITIES,
+    maxAgentLoopIterations: budget.maxAgentLoopIterations,
+    maxInputTokens: budget.maxInputTokens,
+    maxOutputTokens: budget.maxOutputTokens,
+    maxToolCalls: budget.maxToolCalls,
+    maxShadowTurnsPerCredentialPerTick:
+      MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK,
+    oneSubmissionPerTurn: true,
+    hiddenReasoningExported: false,
+  });
+}
+
+function legacyAgentLabDriverPolicy(budget: AgentLabBudget) {
   return Object.freeze({
     protocolVersion: "wt.agent-lab.v1",
     policyVersion: "stable_driver_v1",
     canonicalObservationWins: true,
-    allowedTools: AGENT_LAB_MCP_TOOL_NAMES,
-    disabledCapabilities: [
+    // These literals reproduce the released v1 policy bytes. Do not derive
+    // them from current shared collections, whose ordering may evolve.
+    allowedTools: Object.freeze([
+      "wt_identity_get",
+      "wt_turn_wait",
+      "wt_action_submit",
+      "wt_receipt_get",
+    ]),
+    disabledCapabilities: Object.freeze([
       "browser",
       "code_execution",
       "delegation",
@@ -35,7 +83,7 @@ export function agentLabDriverPolicy(budget: AgentLabBudget) {
       "memory_write",
       "shell",
       "web",
-    ],
+    ]),
     maxAgentLoopIterations: budget.maxAgentLoopIterations,
     maxInputTokens: budget.maxInputTokens,
     maxOutputTokens: budget.maxOutputTokens,
@@ -47,6 +95,12 @@ export function agentLabDriverPolicy(budget: AgentLabBudget) {
 
 export function agentLabDriverPolicyDigest(budget: AgentLabBudget): string {
   return sha256Hex(canonicalStringify(agentLabDriverPolicy(budget)));
+}
+
+export function agentLabLegacyDriverPolicyDigest(
+  budget: AgentLabBudget,
+): string {
+  return sha256Hex(canonicalStringify(legacyAgentLabDriverPolicy(budget)));
 }
 
 export function agentLabPromptDigest(prompt = CITIZEN_TURN_PROMPT): string {

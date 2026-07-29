@@ -2922,6 +2922,7 @@ export class SimulationService implements SimulationApi {
             db,
             runId,
             beforePreparation.currentTick + 1,
+            run.manifest.agentLab,
           );
       const tier2Batch = tier2Provider === undefined || opportunities.length === 0
         ? undefined

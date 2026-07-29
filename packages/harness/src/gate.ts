@@ -5,6 +5,7 @@ import {
 } from "@worldtangle/shared";
 import {
   agentLabDriverPolicyDigest,
+  agentLabPilotOpportunityFixture,
   agentLabPromptDigest,
   agentLabToolPins,
   CITIZEN_TURN_PROMPT,
@@ -18,7 +19,7 @@ const budget = {
   maxToolCalls: 8,
 };
 const manifest = validateExperimentManifest({
-  schemaVersion: 1,
+  schemaVersion: 2,
   protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
   studyId: "agent-lab-offline-gate",
   scenario: {
@@ -31,6 +32,7 @@ const manifest = validateExperimentManifest({
       perAgentDailyTokens: 10_000,
     },
     policyOverrides: {},
+    opportunityFixture: agentLabPilotOpportunityFixture(),
   },
   cohort: {
     strategy: "stable_stratified_v1",
@@ -67,6 +69,9 @@ const manifest = validateExperimentManifest({
       hermesVersion: "Hermes Agent v0.18.2 (gate) · upstream abcdef0",
       hermesPythonVersion: "3.11.15",
       hermesOpenAiSdkVersion: "2.24.0",
+      hermesMcpSdkVersion: "1.26.0",
+      hermesStarletteVersion: "1.3.1",
+      hermesAiohttpVersion: "3.14.1",
       providerEnvAllowlist: "MINIMAX_API_KEY",
     },
   },

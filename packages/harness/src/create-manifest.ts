@@ -10,21 +10,25 @@ import {
 } from "@worldtangle/shared";
 import {
   CITIZEN_TURN_PROMPT,
+  MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK,
   agentLabDriverPolicyDigest,
+  agentLabPilotOpportunityFixture,
   agentLabPromptDigest,
   agentLabToolPins,
 } from "./driver-policy";
-import {
-  inspectHermesRuntime,
-  parseHermesVersionOutput,
-} from "./hermes-version";
+import { inspectHermesRuntime } from "./hermes-version";
 
 const DEFAULT_GENERATION_BUDGET = Object.freeze({
   maxAgentLoopIterations: 8,
-  maxInputTokens: 8_000,
-  maxOutputTokens: 1_000,
+  // Hermes reports usage for the complete multi-iteration run, not one model
+  // request. These limits therefore cover the whole bounded citizen turn.
+  maxInputTokens: 64_000,
+  maxOutputTokens: 8_000,
   maxToolCalls: 8,
 });
+const PILOT_COHORT_SIZE = 8;
+export const PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK = 1;
+const MICROCENTS_PER_CENT = 1_000_000n;
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -45,15 +49,58 @@ export function createPilotManifest(input: Readonly<{
   outputMicrocentsPerToken: number;
   providerEnvAllowlist: string;
   hermesExecutable?: string;
-  hermesVersionOutput?: string;
   createdWall?: string;
 }>): ExperimentManifest {
   const generationBudget = DEFAULT_GENERATION_BUDGET;
-  const hermes = input.hermesVersionOutput === undefined
-    ? inspectHermesRuntime(input.hermesExecutable)
-    : parseHermesVersionOutput(input.hermesVersionOutput);
+  const hermes = inspectHermesRuntime(input.hermesExecutable);
+  const opportunityFixture = agentLabPilotOpportunityFixture();
+  if (PILOT_COHORT_SIZE > MAX_SHADOW_TURNS_PER_CREDENTIAL_PER_TICK) {
+    throw new Error(
+      "pilot cohort exceeds the pinned shadow-turn credential limit",
+    );
+  }
+  for (const [label, value] of [
+    ["inputMicrocentsPerToken", input.inputMicrocentsPerToken],
+    ["outputMicrocentsPerToken", input.outputMicrocentsPerToken],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${label} must be a nonnegative safe integer`);
+    }
+  }
+  const worstCaseTurnTokens =
+    generationBudget.maxInputTokens + generationBudget.maxOutputTokens;
+  const worstCaseTurnMicrocents =
+    BigInt(generationBudget.maxInputTokens) *
+      BigInt(input.inputMicrocentsPerToken) +
+    BigInt(generationBudget.maxOutputTokens) *
+      BigInt(input.outputMicrocentsPerToken);
+  const fixtureTurnsByTick = new Map<number, number>();
+  for (const tick of opportunityFixture.ticks) {
+    fixtureTurnsByTick.set(tick, (fixtureTurnsByTick.get(tick) ?? 0) + 1);
+  }
+  const maximumFixtureTurnsPerAgentPerTick = Math.max(
+    0,
+    ...fixtureTurnsByTick.values(),
+  );
+  const dailyTurnCapacity =
+    maximumFixtureTurnsPerAgentPerTick +
+    PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK;
+  const pinnedTurnCount =
+    opportunityFixture.ticks.length * PILOT_COHORT_SIZE;
+  const nonFixtureTurnHeadroom =
+    fixtureTurnsByTick.size *
+    PILOT_COHORT_SIZE *
+    PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK;
+  const budgetedTurnCount = pinnedTurnCount + nonFixtureTurnHeadroom;
+  const pinnedRunMicrocents =
+    BigInt(budgetedTurnCount) * worstCaseTurnMicrocents;
+  const runCostCentsMax = pinnedRunMicrocents === 0n
+    ? 1n
+    : (
+        pinnedRunMicrocents + MICROCENTS_PER_CENT - 1n
+      ) / MICROCENTS_PER_CENT;
   return experimentManifestSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     protocolVersion: AGENT_LAB_PROTOCOL_VERSION,
     studyId: input.studyId,
     scenario: {
@@ -62,14 +109,15 @@ export function createPilotManifest(input: Readonly<{
       seeds: [41, 42, 43],
       ticks: 60,
       budgets: {
-        runCostCentsMax: "500",
-        perAgentDailyTokens: 10_000,
+        runCostCentsMax: runCostCentsMax.toString(),
+        perAgentDailyTokens: worstCaseTurnTokens * dailyTurnCapacity,
       },
       policyOverrides: {},
+      opportunityFixture,
     },
     cohort: {
       strategy: "stable_stratified_v1",
-      size: 8,
+      size: PILOT_COHORT_SIZE,
       controller: "shadow",
       strata: ["occupation", "employment_status", "household"],
     },
@@ -151,6 +199,9 @@ export function createPilotManifest(input: Readonly<{
         hermesVersion: hermes.version,
         hermesPythonVersion: hermes.pythonVersion,
         hermesOpenAiSdkVersion: hermes.openAiSdkVersion,
+        hermesMcpSdkVersion: hermes.mcpSdkVersion,
+        hermesStarletteVersion: hermes.starletteVersion,
+        hermesAiohttpVersion: hermes.aiohttpVersion,
         providerEnvAllowlist: input.providerEnvAllowlist,
       },
     },

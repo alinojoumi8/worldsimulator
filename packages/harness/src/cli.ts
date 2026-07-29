@@ -53,6 +53,21 @@ function requiredNonnegativeInteger(
   return value;
 }
 
+export function formatCliError(error: unknown): string {
+  const headline = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof AggregateError)) return headline;
+  const details = error.errors
+    .map((nested) => formatCliError(nested))
+    .filter((message, index, messages) => (
+      message.length > 0 &&
+      message !== headline &&
+      messages.indexOf(message) === index
+    ));
+  return [headline, ...details.map((message) => `caused by: ${message}`)]
+    .join("\n")
+    .slice(0, 4_000);
+}
+
 async function main(): Promise<void> {
   const args = parseArguments(process.argv.slice(2));
   if (args.command === "init") {
@@ -129,7 +144,7 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   await main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });
 }

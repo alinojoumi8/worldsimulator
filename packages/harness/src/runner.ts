@@ -27,12 +27,16 @@ import {
 } from "../../../apps/server/src/persistence";
 import { writeTrialArtifact } from "./artifact";
 import {
+  agentLabDriverPolicy,
+  agentLabDriverPolicyDigest,
   agentLabToolSchemaDigest,
 } from "./driver-policy";
 import {
   HermesApiTurnDriver,
   HermesBudgetExceededError,
   HermesProfileFleet,
+  HermesTurnExecutionError,
+  redactSecrets,
   type HermesTurnStats,
 } from "./hermes";
 import { inspectHermesRuntime } from "./hermes-version";
@@ -62,6 +66,20 @@ export function assertFreshStudyDirectory(studyDirectory: string): void {
         "Use a new directory so crashed or prior trials cannot contaminate the study.",
     );
   }
+}
+
+export async function collectTrialCleanupErrors(
+  steps: readonly (() => void | Promise<void>)[],
+): Promise<readonly unknown[]> {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }
 
 export interface RunStudyOptions {
@@ -129,6 +147,9 @@ function validateRuntimePins(
     hermesVersion: hermes.version,
     hermesPythonVersion: hermes.pythonVersion,
     hermesOpenAiSdkVersion: hermes.openAiSdkVersion,
+    hermesMcpSdkVersion: hermes.mcpSdkVersion,
+    hermesStarletteVersion: hermes.starletteVersion,
+    hermesAiohttpVersion: hermes.aiohttpVersion,
   } as const;
   for (const key of Object.keys(hermesPins) as Array<keyof typeof hermesPins>) {
     const current = hermesPins[key];
@@ -198,11 +219,66 @@ async function readTurn(
     : body.turn as AgentTurnEnvelope;
 }
 
-async function driveExternalAdvance(
+function turnFailureToStats(
+  turn: AgentTurnEnvelope,
+  error: unknown,
+  secrets: readonly (string | undefined)[] = [],
+): HermesTurnStats {
+  if (error instanceof HermesBudgetExceededError) return error.asStats();
+  if (error instanceof HermesTurnExecutionError) return error.asStats();
+  return Object.freeze({
+    runId: `failed:${turn.turnId}`,
+    turnId: turn.turnId,
+    opportunityKey: turn.opportunityKey,
+    agentId: turn.agentId,
+    targetTick: turn.targetTick,
+    status: "failed",
+    inputTokens: 0,
+    outputTokens: 0,
+    latencyMs: 0,
+    budgetViolations: [],
+    failure: redactSecrets(
+      error instanceof Error ? error.message : String(error),
+      secrets,
+    ).slice(0, 1_000),
+  });
+}
+
+function shadowCredentialFailureToStats(
+  credential: TrialCredential,
+  targetTick: number,
+  error: unknown,
+): HermesTurnStats {
+  return Object.freeze({
+    runId: `failed:${credential.credentialId}:tick:${targetTick}`,
+    agentId: credential.agentId,
+    targetTick,
+    status: "failed",
+    inputTokens: 0,
+    outputTokens: 0,
+    latencyMs: 0,
+    budgetViolations: [],
+    failure: redactSecrets(
+      error instanceof Error ? error.message : String(error),
+      [credential.token],
+    ).slice(0, 1_000),
+  });
+}
+
+function disableCredential(
+  credential: TrialCredential,
+  disabledAgentIds: Set<string>,
+  revokeCredential: (credential: TrialCredential) => void,
+): void {
+  disabledAgentIds.add(credential.agentId);
+  revokeCredential(credential);
+}
+
+export async function driveExternalAdvance(
   advance: Promise<JsonResponse>,
   baseUrl: string,
   credentials: readonly TrialCredential[],
-  driver: HermesApiTurnDriver,
+  driver: Pick<HermesApiTurnDriver, "runTurn">,
   hermesRuns: HermesTurnStats[],
   drivenTurnIds: Set<string>,
   disabledAgentIds: Set<string>,
@@ -228,86 +304,198 @@ async function driveExternalAdvance(
       try {
         const result = await driver.runTurn(turn);
         hermesRuns.push(result);
-        if (result.budgetViolations.length > 0) {
-          disabledAgentIds.add(credential.agentId);
-          revokeAfterAdvance.set(credential.agentId, credential);
+        if (result.status !== "completed" || result.budgetViolations.length > 0) {
+          disableCredential(credential, disabledAgentIds, (disabledCredential) => {
+            revokeAfterAdvance.set(disabledCredential.agentId, disabledCredential);
+          });
         }
       } catch (error) {
-        disabledAgentIds.add(credential.agentId);
-        if (error instanceof HermesBudgetExceededError) {
-          hermesRuns.push(error.asStats());
-        } else {
-          hermesRuns.push(Object.freeze({
-            runId: `failed:${turn.turnId}`,
-            agentId: turn.agentId,
-            targetTick: turn.targetTick,
-            status: "failed",
-            inputTokens: 0,
-            outputTokens: 0,
-            latencyMs: 0,
-            budgetViolations: [],
-            failure: error instanceof Error ? error.message : String(error),
-          }));
-        }
-        revokeCredential(credential);
+        hermesRuns.push(turnFailureToStats(turn, error, [credential.token]));
+        disableCredential(credential, disabledAgentIds, (disabledCredential) => {
+          revokeAfterAdvance.set(disabledCredential.agentId, disabledCredential);
+        });
       }
       drove = true;
     }
     if (!drove) await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
-  const response = await advance;
-  for (const credential of revokeAfterAdvance.values()) {
-    revokeCredential(credential);
+  try {
+    return await advance;
+  } finally {
+    for (const credential of revokeAfterAdvance.values()) {
+      revokeCredential(credential);
+    }
   }
-  return response;
 }
 
-async function driveShadowTurns(
-  baseUrl: string,
-  credentials: readonly TrialCredential[],
-  driver: HermesApiTurnDriver,
-  hermesRuns: HermesTurnStats[],
-  drivenTurnIds: Set<string>,
-  disabledAgentIds: Set<string>,
-  revokeCredential: (credential: TrialCredential) => void,
+export async function driveShadowTurns(
+  options: Readonly<{
+    baseUrl: string;
+    credentials: readonly TrialCredential[];
+    driver: Pick<HermesApiTurnDriver, "runTurn">;
+    hermesRuns: HermesTurnStats[];
+    drivenTurnIds: Set<string>;
+    disabledAgentIds: Set<string>;
+    targetTick: number;
+    maximumTurnsPerCredential: number;
+    revokeCredential: (credential: TrialCredential) => void;
+  }>,
 ): Promise<void> {
-  for (const credential of credentials) {
-    if (disabledAgentIds.has(credential.agentId)) continue;
-    while (!disabledAgentIds.has(credential.agentId)) {
-      const turn = await readTurn(baseUrl, credential.token);
-      if (turn === null) break;
+  const {
+    baseUrl,
+    credentials,
+    driver,
+    hermesRuns,
+    drivenTurnIds,
+    disabledAgentIds,
+    targetTick,
+    maximumTurnsPerCredential,
+    revokeCredential,
+  } = options;
+  const active = credentials.map(
+    (credential) => !disabledAgentIds.has(credential.agentId),
+  );
+  const observedTurns = credentials.map(() => 0);
+  const runsByCredential = credentials.map((): HermesTurnStats[] => []);
+  const disableShadowCredential = (
+    credentialIndex: number,
+    error?: unknown,
+  ): void => {
+    const credential = credentials[credentialIndex]!;
+    active[credentialIndex] = false;
+    disabledAgentIds.add(credential.agentId);
+    if (error !== undefined) {
+      runsByCredential[credentialIndex]!.push(
+        shadowCredentialFailureToStats(credential, targetTick, error),
+      );
+    }
+    try {
+      revokeCredential(credential);
+    } catch (revokeError) {
+      runsByCredential[credentialIndex]!.push(
+        shadowCredentialFailureToStats(
+          credential,
+          targetTick,
+          revokeError,
+        ),
+      );
+    }
+  };
+
+  while (active.some(Boolean)) {
+    const activeCredentials = credentials.flatMap((credential, index) =>
+      active[index] ? [{ credential, index }] : []
+    );
+    const readResults = await Promise.allSettled(
+      activeCredentials.map(({ credential }) =>
+        readTurn(baseUrl, credential.token)
+      ),
+    );
+    const pendingRuns: Array<{
+      readonly credentialIndex: number;
+      readonly turn: AgentTurnEnvelope;
+      readonly promise: Promise<HermesTurnStats>;
+    }> = [];
+
+    for (let resultIndex = 0; resultIndex < readResults.length; resultIndex += 1) {
+      const { credential, index: credentialIndex } =
+        activeCredentials[resultIndex]!;
+      const readResult = readResults[resultIndex]!;
+      if (readResult.status === "rejected") {
+        disableShadowCredential(credentialIndex, readResult.reason);
+        continue;
+      }
+      const turn = readResult.value;
+      if (turn === null) {
+        active[credentialIndex] = false;
+        continue;
+      }
+      if (turn.agentId !== credential.agentId) {
+        disableShadowCredential(
+          credentialIndex,
+          new Error(
+            `shadow turn ${turn.turnId} for ${turn.agentId} was served to ` +
+              `credential ${credential.agentId}`,
+          ),
+        );
+        continue;
+      }
+      if (turn.targetTick !== targetTick) {
+        disableShadowCredential(
+          credentialIndex,
+          new Error(
+            `shadow turn ${turn.turnId} targets tick ${turn.targetTick}; ` +
+              `the harness is driving tick ${targetTick}`,
+          ),
+        );
+        continue;
+      }
+      observedTurns[credentialIndex] = observedTurns[credentialIndex]! + 1;
+      if (observedTurns[credentialIndex]! > maximumTurnsPerCredential) {
+        disableShadowCredential(
+          credentialIndex,
+          new Error(
+            `shadow credential for ${credential.agentId} exceeded its manifested ` +
+              `${maximumTurnsPerCredential}-turn circuit breaker`,
+          ),
+        );
+        continue;
+      }
       if (drivenTurnIds.has(turn.turnId)) {
-        throw new Error(`shadow turn ${turn.turnId} remained open after it was driven`);
+        disableShadowCredential(
+          credentialIndex,
+          new Error(`shadow turn ${turn.turnId} remained open after it was driven`),
+        );
+        continue;
       }
       drivenTurnIds.add(turn.turnId);
-      try {
-        const result = await driver.runTurn(turn);
-        hermesRuns.push(result);
-        if (result.budgetViolations.length > 0) {
-          disabledAgentIds.add(credential.agentId);
-          revokeCredential(credential);
+      // Calling in credential order makes the production async driver's budget
+      // reservation (which occurs before its first await) canonical while the
+      // provider work remains concurrent.
+      const promise = (async () => driver.runTurn(turn))();
+      pendingRuns.push({ credentialIndex, turn, promise });
+    }
+
+    const runResults = await Promise.allSettled(
+      pendingRuns.map(({ promise }) => promise),
+    );
+    for (let resultIndex = 0; resultIndex < runResults.length; resultIndex += 1) {
+      const pending = pendingRuns[resultIndex]!;
+      const runResult = runResults[resultIndex]!;
+      if (runResult.status === "fulfilled") {
+        runsByCredential[pending.credentialIndex]!.push(runResult.value);
+        if (
+          runResult.value.status !== "completed" ||
+          runResult.value.budgetViolations.length > 0
+        ) {
+          disableShadowCredential(pending.credentialIndex);
         }
-      } catch (error) {
-        disabledAgentIds.add(credential.agentId);
-        if (error instanceof HermesBudgetExceededError) {
-          hermesRuns.push(error.asStats());
-        } else {
-          hermesRuns.push(Object.freeze({
-            runId: `failed:${turn.turnId}`,
-            agentId: turn.agentId,
-            targetTick: turn.targetTick,
-            status: "failed",
-            inputTokens: 0,
-            outputTokens: 0,
-            latencyMs: 0,
-            budgetViolations: [],
-            failure: error instanceof Error ? error.message : String(error),
-          }));
-        }
-        revokeCredential(credential);
+      } else {
+        runsByCredential[pending.credentialIndex]!.push(
+          turnFailureToStats(
+            pending.turn,
+            runResult.reason,
+            [credentials[pending.credentialIndex]!.token],
+          ),
+        );
+        disableShadowCredential(pending.credentialIndex);
       }
     }
   }
+
+  // Preserve artifact ordering by the manifested credential order, independent
+  // of read latency or provider completion order.
+  for (const credentialRuns of runsByCredential) {
+    hermesRuns.push(...credentialRuns);
+  }
+}
+
+export function shadowTurnCircuitBreakerLimit(
+  manifest: Pick<ExperimentManifest, "generationBudget">,
+): number {
+  return agentLabDriverPolicy(
+    manifest.generationBudget,
+  ).maxShadowTurnsPerCredentialPerTick;
 }
 
 async function waitForReplay(
@@ -356,6 +544,7 @@ async function runTrial(
     webRoot: false,
   });
   const fleet = new HermesProfileFleet(runtimeRoot, options.hermesExecutable);
+  let trialFailure: unknown;
   try {
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = new URL(address).origin;
@@ -375,14 +564,15 @@ async function runTrial(
           trialId: plan.trialId,
           experimentManifestDigest: manifestDigest,
           mode: plan.mode,
-          ...(plan.mode === "native"
+          cohortSelection: {
+            strategy: manifest.cohort.strategy,
+            size: manifest.cohort.size,
+            controller: plan.mode,
+            strata: [...manifest.cohort.strata],
+          },
+          ...(manifest.scenario.opportunityFixture === undefined
             ? {}
-            : {
-                cohortSelection: {
-                  ...manifest.cohort,
-                  controller: plan.mode,
-                },
-              }),
+            : { opportunityFixture: manifest.scenario.opportunityFixture }),
           decisionDeadlineMs: Math.min(
             120_000,
             Math.max(50, Number(manifest.provider.settings["decisionDeadlineMs"] ?? 60_000)),
@@ -487,15 +677,17 @@ async function runTrial(
         : await advance;
       requireStatus(advanced, 200, `advance to tick ${tick}`);
       if (plan.mode === "shadow" && driver !== undefined) {
-        await driveShadowTurns(
+        await driveShadowTurns({
           baseUrl,
           credentials,
           driver,
           hermesRuns,
           drivenTurnIds,
           disabledAgentIds,
+          targetTick: tick,
+          maximumTurnsPerCredential: shadowTurnCircuitBreakerLimit(manifest),
           revokeCredential,
-        );
+        });
       }
     }
     const sourceDb = openWorldDatabase(dataDir, created.simulation.id, created.run.id);
@@ -514,7 +706,7 @@ async function runTrial(
 
     // Prove replay is independent of Hermes by stopping every profile before
     // requesting the strict source-run replay.
-    await fleet.stop();
+    await fleet.stopProcesses();
     const replayAccepted = replaySimulationResponseSchema.parse(requireStatus(
       await jsonRequest(
         baseUrl,
@@ -542,16 +734,33 @@ async function runTrial(
       replay,
       hermesRuns,
     });
+  } catch (error) {
+    trialFailure = error;
+    throw error;
   } finally {
-    await fleet.stop();
-    await app.close();
-    if (!options.keepRuntime) {
-      rmSync(runtimeRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 100,
-      });
+    const cleanupErrors = await collectTrialCleanupErrors([
+      () => fleet.stopProcesses(),
+      () => app.close(),
+      ...(options.keepRuntime
+        ? [() => fleet.removeProfiles()]
+        : [(): void => {
+            rmSync(runtimeRoot, {
+              recursive: true,
+              force: true,
+              maxRetries: 50,
+              retryDelay: 100,
+            });
+          }]),
+    ]);
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        trialFailure === undefined
+          ? cleanupErrors
+          : [trialFailure, ...cleanupErrors],
+        trialFailure === undefined
+          ? "Agent Lab trial cleanup was incomplete"
+          : "Agent Lab trial failed and cleanup was incomplete",
+      );
     }
   }
 }
@@ -560,6 +769,15 @@ export async function runStudy(
   manifest: ExperimentManifest,
   options: RunStudyOptions,
 ): Promise<StudyRunResult> {
+  if (
+    agentLabDriverPolicyDigest(manifest.generationBudget) !==
+      manifest.driverPolicyDigest
+  ) {
+    throw new Error(
+      "live Agent Lab execution requires the current stable_driver_v2 policy; " +
+        "legacy driver manifests are verification and offline-replay only",
+    );
+  }
   const studyRoot = resolve(options.studyDirectory);
   const lockfileDigest = validateRuntimePins(
     manifest,

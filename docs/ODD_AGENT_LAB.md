@@ -39,6 +39,10 @@ Document the fixed tick phase order, when decision opportunities open, the
 deadline, canonical opportunity ordering, fallback behavior, action
 revalidation, intervention schedule, receipt finalization, and replay boundary.
 Network completion order must never become authoritative scheduling order.
+Record any laboratory opportunity fixture by version, exact ticks, and the
+canonical experiment-manifest digest that covers those fixture bytes. Separate
+fixture-created opportunities from opportunities that emerge from ordinary
+world state.
 
 ## 4. Design concepts
 
@@ -68,6 +72,8 @@ Record:
 - frozen seeds;
 - engine commit, Node version, and lockfile digest;
 - cohort selection and resolved citizens;
+- laboratory opportunity fixture version and tick schedule, plus the canonical
+  experiment-manifest digest that binds them, or `none`;
 - initial policies and interventions;
 - model/provider settings, provider-environment name allowlist, runtime
   dependency versions, and budgets;
@@ -96,6 +102,20 @@ For every changed realism condition, document:
 
 Enable only one new realism condition in a comparison unless the study is
 explicitly designed as an interaction test.
+Controlled elicitation fixtures prove only that a bounded opportunity was
+scheduled and offered. For shadow and external arms, completion additionally
+requires a valid terminal receipt and a completed Hermes run with positive
+terminal input and output tokens plus at least one scoped tool call for every
+scheduled turn. Release eligibility also requires zero budget violations and
+no failed Hermes statistics rows outside those completed fixture turns. Poll
+retries retain one Hermes run identity, and cleanup/stop requests are not
+counted as separate runs. Native completion is evidenced by the
+authoritative decision, action, and fixture event records; native intentionally
+has no external turn/receipt sidecar. The canonical authoritative fixture
+schedule is reconstructed from those persisted events. Real-agent participation
+requires all of the manifested run, tool, and token evidence. Fixture evidence
+alone does not satisfy the Phase 12 release gate and does not support a claim of
+naturally emergent behavior or improved realism.
 
 ## 8. Validity and limitations
 
