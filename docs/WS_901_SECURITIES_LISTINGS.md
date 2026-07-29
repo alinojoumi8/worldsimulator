@@ -2,7 +2,7 @@
 
 ## Outcome
 
-WS-901 establishes the first authoritative Phase 9 securities state without claiming that trading exists. A Riverbend company may be listed only when it is active, at least 30 ticks old, has either positive trailing 30-tick operating profit or at least $100,000 in its active checking account, and lists no more shares than its authoritative cap table contains.
+WS-901 establishes the first authoritative Phase 9 securities state without claiming that trading exists. A Riverbend company may be listed only when it is active, at least 30 ticks old, has either positive trailing 30-tick operating profit or at least $100,000 aggregated across its active checking accounts, and lists no more shares than its authoritative cap table contains.
 
 The shared contract fixes the pilot policy as `riverbend_listing_v1`. Symbols are two to five uppercase alphanumeric characters beginning with a letter, reference prices and listed shares are positive signed-64-bit integers, and the exchange uses a deterministic daily call schedule with a ±20% price band reserved for WS-903.
 
