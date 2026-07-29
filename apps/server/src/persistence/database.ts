@@ -5156,7 +5156,14 @@ CREATE TRIGGER securities_status_transition
 BEFORE UPDATE OF status ON securities
 WHEN NOT (
   (OLD.status = 'listed' AND NEW.status IN ('suspended', 'delisted')) OR
-  (OLD.status = 'suspended' AND NEW.status IN ('listed', 'delisted'))
+  (OLD.status = 'suspended' AND NEW.status = 'delisted') OR
+  (
+    OLD.status = 'suspended' AND NEW.status = 'listed' AND EXISTS (
+      SELECT 1 FROM securities_markets market
+      WHERE market.run_id = NEW.run_id AND market.id = NEW.market_id
+        AND market.status = 'open'
+    )
+  )
 )
 BEGIN SELECT RAISE(ABORT, 'invalid security status transition'); END;
 CREATE TRIGGER securities_no_delete

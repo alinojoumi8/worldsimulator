@@ -36,7 +36,7 @@ import {
 const temporaryDirectories: string[] = [];
 const EXPECTED_MIGRATION_COUNT = BigInt(WORLD_DATABASE_MIGRATION_COUNT);
 const PHASE_9_SECURITIES_LISTINGS_CHECKSUM =
-  "36c382218a8c3de4cd0402aab7c98af0fc20f75d7f6bf6f84e64fbe75003e534";
+  "de234ea69eb5a99df3d2e9256922cb42ade962675721832850269d489124c1c5";
 
 function temporaryDirectory(): string {
   const path = mkdtempSync(join(tmpdir(), "worldtangle-db-"));

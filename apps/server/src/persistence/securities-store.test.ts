@@ -349,6 +349,54 @@ describe("SqliteSecuritiesStore", () => {
     expect(state.store.market()).toBeNull();
     expect(state.store.list()).toEqual([]);
     expect(new SqliteEventStore(state.db, TEST_RUN_ID).count()).toBe(eventCount);
+
+    state.db.transaction(() => {
+      expect(() => state.store.listSecurity({
+        companyId: state.companyId,
+        symbol: "RBG",
+        sharesListed: "2500",
+        referencePriceCents: "1250",
+        triggerEventId: state.triggerEventId,
+      }, context(state.db, state.ids, 30))).toThrow(
+        /forced securities insert failure/,
+      );
+    }).immediate();
+
+    expect(state.ids.serialize()).toEqual(idCheckpoint);
+    expect(state.store.market()).toBeNull();
+    expect(state.store.list()).toEqual([]);
+    expect(new SqliteEventStore(state.db, TEST_RUN_ID).count()).toBe(eventCount);
+  });
+
+  it("does not relist a suspended security while the market is halted", () => {
+    const state = fixture();
+    const listed = state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30));
+    const updateSecurityStatus = state.db.prepare(`
+      UPDATE securities SET status = ?
+      WHERE run_id = ? AND id = ?
+    `);
+    const updateMarketStatus = state.db.prepare(`
+      UPDATE securities_markets SET status = ?
+      WHERE run_id = ? AND id = ?
+    `);
+
+    updateSecurityStatus.run("suspended", TEST_RUN_ID, listed.id);
+    updateMarketStatus.run("halted", TEST_RUN_ID, listed.marketId);
+    expect(() => updateSecurityStatus.run(
+      "listed",
+      TEST_RUN_ID,
+      listed.id,
+    )).toThrow(/invalid security status transition/);
+
+    updateMarketStatus.run("open", TEST_RUN_ID, listed.marketId);
+    expect(updateSecurityStatus.run("listed", TEST_RUN_ID, listed.id).changes)
+      .toBe(1);
   });
 
   it("fails closed when canonical listing evidence is tampered", () => {

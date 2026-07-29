@@ -400,8 +400,15 @@ export class SqliteSecuritiesStore {
         @sourceEventId
       )
     `).run({
-      ...market,
+      runId: market.runId,
+      id: market.id,
+      kind: market.kind,
+      operatorInstitutionId: market.operatorInstitutionId,
       auctionScheduleCanonical: canonicalStringify(market.auctionSchedule),
+      priceBandBp: market.priceBandBp,
+      status: market.status,
+      openedTick: market.openedTick,
+      sourceEventId: market.sourceEventId,
     });
   }
 
@@ -417,8 +424,17 @@ export class SqliteSecuritiesStore {
         @sourceEventId
       )
     `).run({
-      ...security,
+      runId: security.runId,
+      id: security.id,
+      marketId: security.marketId,
+      companyId: security.companyId,
+      symbol: security.symbol,
+      sharesListed: security.sharesListed,
+      referencePriceCents: security.referencePriceCents,
+      listedTick: security.listedTick,
+      status: security.status,
       eligibilityCanonical: canonicalStringify(security.eligibility),
+      sourceEventId: security.sourceEventId,
     });
   }
 
@@ -467,8 +483,7 @@ export class SqliteSecuritiesStore {
   }
 
   private atomic<T>(operation: () => T): T {
-    return this.db.inTransaction
-      ? operation()
-      : this.db.transaction(operation).immediate();
+    // better-sqlite3 uses a savepoint when a transaction is nested.
+    return this.db.transaction(operation).immediate();
   }
 }

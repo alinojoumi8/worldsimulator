@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   assessSecuritiesListingEligibility,
+  listSecurityInputSchema,
+  RIVERBEND_SECURITIES_AUCTION_SCHEDULE,
+  RIVERBEND_SECURITIES_EXCHANGE_ID,
   RIVERBEND_SECURITIES_LISTING_POLICY,
+  RIVERBEND_SECURITIES_PRICE_BAND_BP,
   SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
   SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
   securitiesListingEligibilityAssessmentSchema,
   securitiesListingEligibilityInputSchema,
+  securitiesMarketOpenedPayloadSchema,
+  securitiesMarketSchema,
+  securityListedPayloadSchema,
+  securitySchema,
 } from "./securities";
 
 const eligibleInput = {
@@ -59,6 +67,19 @@ describe("securities listing eligibility", () => {
     expect(capitalized).toMatchObject({
       eligible: true,
       eligibilityBasis: "capital",
+    });
+
+    const both = assessSecuritiesListingEligibility({
+      ...eligibleInput,
+      capitalCents: RIVERBEND_SECURITIES_LISTING_POLICY.minimumCapitalCents,
+    });
+    expect(both).toMatchObject({
+      eligible: true,
+      eligibilityBasis: "both",
+      checks: {
+        profitability: true,
+        capital: true,
+      },
     });
   });
 
@@ -153,6 +174,111 @@ describe("securities listing eligibility", () => {
     expect(securitiesListingEligibilityAssessmentSchema.safeParse({
       ...valid,
       eligible: false,
+    }).success).toBe(false);
+  });
+
+  it("enforces the authoritative signed SQLite integer range", () => {
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
+      capitalCents: "9223372036854775807",
+    }).success).toBe(true);
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
+      capitalCents: "9223372036854775808",
+    }).success).toBe(false);
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
+      capitalCents: "-9223372036854775809",
+    }).success).toBe(false);
+  });
+});
+
+describe("securities public schemas", () => {
+  const market = {
+    id: "mkt_00000001",
+    runId: "run_00000001",
+    kind: "securities",
+    operatorInstitutionId: RIVERBEND_SECURITIES_EXCHANGE_ID,
+    auctionSchedule: RIVERBEND_SECURITIES_AUCTION_SCHEDULE,
+    priceBandBp: RIVERBEND_SECURITIES_PRICE_BAND_BP,
+    status: "open",
+    openedTick: 30,
+    sourceEventId: "evt_00000001",
+  } as const;
+  const listInput = {
+    companyId: eligibleInput.companyId,
+    symbol: "RBG",
+    sharesListed: "2500",
+    referencePriceCents: "1250",
+  } as const;
+  const marketOpenedPayload = {
+    marketId: market.id,
+    operatorInstitutionId: market.operatorInstitutionId,
+    priceBandBp: market.priceBandBp,
+    openedTick: market.openedTick,
+  } as const;
+  const listedPayload = {
+    securityId: "sec_00000001",
+    companyId: eligibleInput.companyId,
+    symbol: listInput.symbol,
+    sharesListed: listInput.sharesListed,
+    referencePrice: listInput.referencePriceCents,
+  } as const;
+
+  it("parses only the frozen Riverbend market shape", () => {
+    expect(securitiesMarketSchema.parse(market)).toEqual(market);
+    expect(securitiesMarketSchema.safeParse({
+      ...market,
+      auctionSchedule: { frequencyTicks: 2, offsetTick: 0 },
+    }).success).toBe(false);
+  });
+
+  it("parses security records with validated eligibility evidence", () => {
+    const security = {
+      id: listedPayload.securityId,
+      runId: market.runId,
+      marketId: market.id,
+      companyId: listedPayload.companyId,
+      symbol: listedPayload.symbol,
+      sharesListed: listedPayload.sharesListed,
+      referencePriceCents: listedPayload.referencePrice,
+      listedTick: market.openedTick,
+      status: "listed",
+      eligibility: assessSecuritiesListingEligibility(eligibleInput),
+      sourceEventId: "evt_00000002",
+    } as const;
+    expect(securitySchema.parse(security)).toEqual(security);
+    expect(securitySchema.safeParse({
+      ...security,
+      status: "trading",
+    }).success).toBe(false);
+  });
+
+  it("parses strict listing inputs", () => {
+    expect(listSecurityInputSchema.parse(listInput)).toEqual(listInput);
+    expect(listSecurityInputSchema.safeParse({
+      ...listInput,
+      sharesListed: "0",
+    }).success).toBe(false);
+  });
+
+  it("parses the exact market-opened event payload", () => {
+    expect(securitiesMarketOpenedPayloadSchema.parse(marketOpenedPayload))
+      .toEqual(marketOpenedPayload);
+    expect(securitiesMarketOpenedPayloadSchema.safeParse({
+      ...marketOpenedPayload,
+      priceBandBp: 2_001,
+    }).success).toBe(false);
+  });
+
+  it("keeps the frozen referencePrice listing-event key", () => {
+    expect(securityListedPayloadSchema.parse(listedPayload)).toEqual(listedPayload);
+    expect(securityListedPayloadSchema.safeParse({
+      securityId: listedPayload.securityId,
+      companyId: listedPayload.companyId,
+      symbol: listedPayload.symbol,
+      sharesListed: listedPayload.sharesListed,
+      referencePriceCents: listedPayload.referencePrice,
     }).success).toBe(false);
   });
 });
