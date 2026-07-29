@@ -1091,8 +1091,30 @@ describe("world database", () => {
       WHERE type = 'table' AND name = 'securities'
     `).get()?.name).toBe("securities");
     expect(upgraded.prepare<[], { count: bigint }>(`
+      SELECT COUNT(*) AS count FROM sqlite_schema
+      WHERE type = 'trigger'
+        AND tbl_name IN ('securities', 'securities_markets')
+    `).get()?.count).toBe(8n);
+    expect(upgraded.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'index' AND name = 'securities_market_feed'
+    `).get()?.name).toBe("securities_market_feed");
+    expect(upgraded.prepare<[], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM schema_migrations
     `).get()?.count).toBe(36n);
+    insertTestRun(upgraded);
+    expect(() => upgraded.prepare(`
+      INSERT INTO securities_markets(
+        run_id, id, kind, operator_institution_id,
+        auction_schedule_canonical, price_band_bp, status, opened_tick,
+        source_event_id
+      ) VALUES (?, ?, 'securities', 'inst_riverbend_exchange', ?, 2000, 'open', 0, ?)
+    `).run(
+      TEST_RUN_ID,
+      "mkt_00000001",
+      '{"frequencyTicks":1,"offsetTick":0}',
+      "evt_00000001",
+    )).toThrow(/exact opening event/);
     expect(upgraded.pragma("foreign_key_check")).toEqual([]);
     upgraded.close();
 

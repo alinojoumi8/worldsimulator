@@ -6,8 +6,12 @@ const SIGNED_SQLITE_MAXIMUM = 9_223_372_036_854_775_807n;
 const SIGNED_SQLITE_MINIMUM = -9_223_372_036_854_775_808n;
 
 function withinSignedSqliteRange(value: string): boolean {
-  const parsed = BigInt(value);
-  return parsed >= SIGNED_SQLITE_MINIMUM && parsed <= SIGNED_SQLITE_MAXIMUM;
+  try {
+    const parsed = BigInt(value);
+    return parsed >= SIGNED_SQLITE_MINIMUM && parsed <= SIGNED_SQLITE_MAXIMUM;
+  } catch {
+    return false;
+  }
 }
 
 const signedIntegerSchema = z.string().regex(/^-?(?:0|[1-9]\d*)$/)
@@ -25,6 +29,11 @@ export const securityIdSchema = z.string().regex(/^sec_[0-9a-z]{8,}$/);
 export const securitySymbolSchema = z.string().regex(/^[A-Z][A-Z0-9]{1,4}$/);
 
 export const RIVERBEND_SECURITIES_EXCHANGE_ID = "inst_riverbend_exchange";
+export const RIVERBEND_SECURITIES_PRICE_BAND_BP = 2_000;
+export const RIVERBEND_SECURITIES_AUCTION_SCHEDULE = Object.freeze({
+  frequencyTicks: 1,
+  offsetTick: 0,
+});
 export const SECURITIES_LISTING_POLICY_VERSION = "riverbend_listing_v1";
 
 export const securitiesListingPolicySchema = z.object({
@@ -46,6 +55,22 @@ export const RIVERBEND_SECURITIES_LISTING_POLICY: SecuritiesListingPolicy =
     minimumCapitalCents: "10000000",
   });
 
+export const SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS = Object.freeze([
+  "purchase",
+  "row_settlement",
+] as const);
+
+export const SECURITIES_PROFIT_COST_TRANSACTION_KINDS = Object.freeze([
+  "payroll",
+  "purchase",
+  "loan_payment",
+  "tax",
+  "benefit",
+  "fee",
+  "dividend",
+  "row_settlement",
+] as const);
+
 export const securitiesListingEligibilityInputSchema = z.object({
   companyId: ventureTargetCompanyIdSchema,
   assessedTick: z.number().int().nonnegative().safe(),
@@ -64,6 +89,67 @@ export const securitiesListingEligibilityInputSchema = z.object({
     });
   }
 });
+
+type EligibilityBasis = "profitability" | "capital" | "both" | null;
+
+interface EligibilityDerivationInput {
+  readonly policy: SecuritiesListingPolicy;
+  readonly assessedTick: number;
+  readonly foundedTick: number;
+  readonly companyActive: boolean;
+  readonly profit30Cents: string;
+  readonly capitalCents: string;
+  readonly totalShares: string;
+  readonly requestedShares: string;
+}
+
+interface EligibilityDerivation {
+  readonly ageTicks: number;
+  readonly checks: {
+    readonly active: boolean;
+    readonly minimumAge: boolean;
+    readonly profitability: boolean;
+    readonly capital: boolean;
+    readonly sharesWithinTotal: boolean;
+  };
+  readonly eligibilityBasis: EligibilityBasis;
+  readonly eligible: boolean;
+}
+
+function deriveEligibility(
+  input: EligibilityDerivationInput,
+): EligibilityDerivation {
+  const profitability =
+    BigInt(input.profit30Cents) >= BigInt(input.policy.minimumProfit30Cents);
+  const capital =
+    BigInt(input.capitalCents) >= BigInt(input.policy.minimumCapitalCents);
+  const checks = Object.freeze({
+    active: input.companyActive,
+    minimumAge:
+      input.assessedTick - input.foundedTick >= input.policy.minimumAgeTicks,
+    profitability,
+    capital,
+    sharesWithinTotal:
+      BigInt(input.requestedShares) <= BigInt(input.totalShares),
+  });
+  const eligibilityBasis: EligibilityBasis = profitability && capital
+    ? "both"
+    : profitability
+      ? "profitability"
+      : capital
+        ? "capital"
+        : null;
+  return {
+    ageTicks: input.assessedTick - input.foundedTick,
+    checks,
+    eligibilityBasis,
+    eligible:
+      checks.active &&
+      checks.minimumAge &&
+      (checks.profitability || checks.capital) &&
+      checks.sharesWithinTotal,
+  };
+}
 
 export const securitiesListingEligibilityAssessmentSchema = z.object({
   policy: securitiesListingPolicySchema,
@@ -85,7 +171,73 @@ export const securitiesListingEligibilityAssessmentSchema = z.object({
   }).strict(),
   eligibilityBasis: z.enum(["profitability", "capital", "both"]).nullable(),
   eligible: z.boolean(),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  if (value.foundedTick > value.assessedTick) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["foundedTick"],
+      message: "company founding cannot follow the eligibility assessment",
+    });
+    return;
+  }
+  const expected = deriveEligibility(value);
+  if (value.ageTicks !== expected.ageTicks) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ageTicks"],
+      message: "ageTicks does not match assessedTick and foundedTick",
+    });
+  }
+  if (value.checks.active !== expected.checks.active) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checks", "active"],
+      message: "active check does not match company state",
+    });
+  }
+  if (value.checks.minimumAge !== expected.checks.minimumAge) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checks", "minimumAge"],
+      message: "minimum-age check does not match policy",
+    });
+  }
+  if (value.checks.profitability !== expected.checks.profitability) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checks", "profitability"],
+      message: "profitability check does not match policy",
+    });
+  }
+  if (value.checks.capital !== expected.checks.capital) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checks", "capital"],
+      message: "capital check does not match policy",
+    });
+  }
+  if (value.checks.sharesWithinTotal !== expected.checks.sharesWithinTotal) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checks", "sharesWithinTotal"],
+      message: "share-bound check does not match the cap table",
+    });
+  }
+  if (value.eligibilityBasis !== expected.eligibilityBasis) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["eligibilityBasis"],
+      message: "eligibility basis does not match the qualifying checks",
+    });
+  }
+  if (value.eligible !== expected.eligible) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["eligible"],
+      message: "eligibility result does not match the policy checks",
+    });
+  }
+});
 
 export type SecuritiesListingEligibilityInput = z.infer<
   typeof securitiesListingEligibilityInputSchema
@@ -100,37 +252,14 @@ export function assessSecuritiesListingEligibility(
 ): SecuritiesListingEligibilityAssessment {
   const input = securitiesListingEligibilityInputSchema.parse(rawInput);
   const parsedPolicy = securitiesListingPolicySchema.parse(policy);
-  const profitability =
-    BigInt(input.profit30Cents) >= BigInt(parsedPolicy.minimumProfit30Cents);
-  const capital =
-    BigInt(input.capitalCents) >= BigInt(parsedPolicy.minimumCapitalCents);
-  const checks = Object.freeze({
-    active: input.companyActive,
-    minimumAge:
-      input.assessedTick - input.foundedTick >= parsedPolicy.minimumAgeTicks,
-    profitability,
-    capital,
-    sharesWithinTotal:
-      BigInt(input.requestedShares) <= BigInt(input.totalShares),
+  const derived = deriveEligibility({
+    policy: parsedPolicy,
+    ...input,
   });
-  const eligibilityBasis = profitability && capital
-    ? "both"
-    : profitability
-      ? "profitability"
-      : capital
-        ? "capital"
-        : null;
   return securitiesListingEligibilityAssessmentSchema.parse({
     policy: parsedPolicy,
     ...input,
-    ageTicks: input.assessedTick - input.foundedTick,
-    checks,
-    eligibilityBasis,
-    eligible:
-      checks.active &&
-      checks.minimumAge &&
-      (checks.profitability || checks.capital) &&
-      checks.sharesWithinTotal,
+    ...derived,
   });
 }
 
@@ -140,10 +269,12 @@ export const securitiesMarketSchema = z.object({
   kind: z.literal("securities"),
   operatorInstitutionId: z.literal(RIVERBEND_SECURITIES_EXCHANGE_ID),
   auctionSchedule: z.object({
-    frequencyTicks: z.number().int().positive().safe(),
-    offsetTick: z.number().int().nonnegative().safe(),
+    frequencyTicks: z.literal(
+      RIVERBEND_SECURITIES_AUCTION_SCHEDULE.frequencyTicks,
+    ),
+    offsetTick: z.literal(RIVERBEND_SECURITIES_AUCTION_SCHEDULE.offsetTick),
   }).strict(),
-  priceBandBp: z.number().int().min(1).max(10_000).safe(),
+  priceBandBp: z.literal(RIVERBEND_SECURITIES_PRICE_BAND_BP),
   status: z.enum(["open", "halted", "closed"]),
   openedTick: z.number().int().nonnegative().safe(),
   sourceEventId: eventIdSchema,
@@ -173,7 +304,7 @@ export const listSecurityInputSchema = z.object({
 export const securitiesMarketOpenedPayloadSchema = z.object({
   marketId: securitiesMarketIdSchema,
   operatorInstitutionId: z.literal(RIVERBEND_SECURITIES_EXCHANGE_ID),
-  priceBandBp: z.number().int().min(1).max(10_000).safe(),
+  priceBandBp: z.literal(RIVERBEND_SECURITIES_PRICE_BAND_BP),
   openedTick: z.number().int().nonnegative().safe(),
 }).strict();
 

@@ -6,6 +6,8 @@ import Database from "better-sqlite3";
 import {
   EngineError,
   runIdSchema,
+  SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
+  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
   sha256Hex,
   simulationIdSchema,
 } from "@worldtangle/shared";
@@ -18,6 +20,14 @@ interface Migration {
   readonly sql: string;
   readonly requiresForeignKeysOff?: boolean;
 }
+
+const SECURITIES_PROFIT_REVENUE_SQL =
+  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS
+    .map((kind) => `'${kind}'`)
+    .join(", ");
+const SECURITIES_PROFIT_COST_SQL = SECURITIES_PROFIT_COST_TRANSACTION_KINDS
+  .map((kind) => `'${kind}'`)
+  .join(", ");
 
 const INITIAL_SCHEMA = `
 CREATE TABLE simulations (
@@ -4947,7 +4957,7 @@ CREATE TABLE securities_markets (
     operator_institution_id = 'inst_riverbend_exchange'
   ),
   auction_schedule_canonical TEXT NOT NULL CHECK (
-    json_valid(auction_schedule_canonical)
+    auction_schedule_canonical = '{"frequencyTicks":1,"offsetTick":0}'
   ),
   price_band_bp INTEGER NOT NULL CHECK (price_band_bp = 2000),
   status TEXT NOT NULL CHECK (status IN ('open', 'halted', 'closed')),
@@ -5008,6 +5018,12 @@ WHEN NOT EXISTS (
   SELECT 1 FROM events event
   WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
     AND event.type = 'market.securities.opened'
+    AND event.tick = NEW.opened_tick
+    AND event.actor_kind = 'institution'
+    AND event.actor_id = 'inst_riverbend_exchange'
+    AND event.correlation_id = NEW.id
+    AND event.causation_id IS NOT NULL
+    AND (SELECT COUNT(*) FROM json_each(event.payload_canonical)) = 4
     AND json_extract(event.payload_canonical, '$.marketId') = NEW.id
     AND json_extract(event.payload_canonical, '$.operatorInstitutionId') =
       NEW.operator_institution_id
@@ -5045,6 +5061,12 @@ WHEN
     SELECT 1 FROM events event
     WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
       AND event.type = 'security.listed'
+      AND event.tick = NEW.listed_tick
+      AND event.actor_kind = 'institution'
+      AND event.actor_id = 'inst_riverbend_exchange'
+      AND event.correlation_id = NEW.id
+      AND event.causation_id IS NOT NULL
+      AND (SELECT COUNT(*) FROM json_each(event.payload_canonical)) = 5
       AND json_extract(event.payload_canonical, '$.securityId') = NEW.id
       AND json_extract(event.payload_canonical, '$.companyId') = NEW.company_id
       AND json_extract(event.payload_canonical, '$.symbol') = NEW.symbol
@@ -5083,8 +5105,9 @@ WHEN
           )
         ) OR (
           cap.company_kind = 'dynamic' AND company.status = 'active' AND
+          COALESCE(company.activated_tick, company.founded_tick) IS NOT NULL AND
           NEW.listed_tick -
-            COALESCE(company.activated_tick, company.founded_tick, 0) >= 30
+            COALESCE(company.activated_tick, company.founded_tick) >= 30
         )
       )
       AND (
@@ -5099,12 +5122,10 @@ WHEN
           SELECT COALESCE(SUM(
             CASE
               WHEN leg.direction = 'debit' AND
-                transaction_row.kind IN ('purchase', 'row_settlement')
+                transaction_row.kind IN (${SECURITIES_PROFIT_REVENUE_SQL})
                 THEN CAST(leg.amount_cents AS INTEGER)
               WHEN leg.direction = 'credit' AND
-                transaction_row.kind NOT IN (
-                  'transfer', 'mint', 'loan_disbursement'
-                )
+                transaction_row.kind IN (${SECURITIES_PROFIT_COST_SQL})
                 THEN -CAST(leg.amount_cents AS INTEGER)
               ELSE 0
             END
@@ -5114,14 +5135,13 @@ WHEN
             ON transaction_row.run_id = leg.run_id
             AND transaction_row.id = leg.transaction_id
           WHERE leg.run_id = cap.run_id
-            AND leg.account_id = (
+            AND leg.account_id IN (
               SELECT account.id FROM bank_accounts account
               WHERE account.run_id = cap.run_id
                 AND account.owner_kind = 'company'
                 AND account.owner_id = cap.company_id
                 AND account.account_type = 'checking'
                 AND account.status = 'active'
-              ORDER BY account.id LIMIT 1
             )
             AND transaction_row.tick BETWEEN MAX(0, NEW.listed_tick - 29)
               AND NEW.listed_tick

@@ -6,6 +6,7 @@ import {
   canonicalParse,
   canonicalStringify,
   IdFactory,
+  ledgerTransactionSchema,
   Rng,
   type EventEnvelope,
 } from "@worldtangle/shared";
@@ -103,8 +104,9 @@ function fixture() {
     triggerEvents,
   );
   const ids = IdFactory.restore(population.idState);
-  new SqliteFinanceStore(db, TEST_RUN_ID).initialize(population, ids);
-  const company = db.prepare<[], {
+  const finance = new SqliteFinanceStore(db, TEST_RUN_ID);
+  const financeGenesis = finance.initialize(population, ids);
+  const company = db.prepare<[string], {
     company_id: string;
     balance_cents: string;
   }>(`
@@ -116,10 +118,10 @@ function fixture() {
       AND account.owner_id = cap.company_id
       AND account.account_type = 'checking'
       AND account.status = 'active'
-    WHERE cap.run_id = '${TEST_RUN_ID}' AND cap.company_kind = 'opening'
+    WHERE cap.run_id = ? AND cap.company_kind = 'opening'
     ORDER BY CAST(account.balance_cents AS INTEGER) DESC, cap.company_id
     LIMIT 1
-  `).get();
+  `).get(TEST_RUN_ID);
   if (company === undefined) throw new Error("opening company missing");
   const triggerEvent = context(db, ids, 30).emit(
     "company.listing.requested",
@@ -132,6 +134,8 @@ function fixture() {
   return {
     dataDir,
     db,
+    finance,
+    financeGenesis,
     ids,
     companyId: company.company_id,
     companyBalanceCents: company.balance_cents,
@@ -243,6 +247,118 @@ describe("SqliteSecuritiesStore", () => {
     databases.push(reopened);
     expect(new SqliteSecuritiesStore(reopened, TEST_RUN_ID).get(listed.id))
       .toEqual(listed);
+  });
+
+  it("uses revenue from every active company checking account", () => {
+    const state = fixture();
+    state.db.prepare(`
+      UPDATE bank_accounts SET balance_cents = '0'
+      WHERE run_id = ? AND owner_kind = 'company' AND owner_id = ?
+        AND account_type = 'checking' AND status = 'active'
+    `).run(TEST_RUN_ID, state.companyId);
+    const secondaryAccountId = state.ids.next("acct");
+    state.db.prepare(`
+      INSERT INTO bank_accounts(
+        run_id, id, bank_id, owner_kind, owner_id, account_type,
+        balance_cents, floor_cents, status, opened_tick
+      ) VALUES (?, ?, ?, 'company', ?, 'checking', '0', '0', 'active', 0)
+    `).run(
+      TEST_RUN_ID,
+      secondaryAccountId,
+      state.financeGenesis.bankId,
+      state.companyId,
+    );
+    state.finance.post(ledgerTransactionSchema.parse({
+      id: state.ids.next("txn"),
+      runId: TEST_RUN_ID,
+      tick: 30,
+      kind: "purchase",
+      actor: { kind: "system", id: "securities-test" },
+      reason: "second-account listing revenue test",
+      sourceEventId: null,
+      correlationId: "securities-second-account",
+      idempotencyKey: "securities-second-account",
+      legs: [
+        {
+          accountId: secondaryAccountId,
+          direction: "debit",
+          amountCents: "1",
+        },
+        {
+          accountId: state.financeGenesis.rowAccountId,
+          direction: "credit",
+          amountCents: "1",
+        },
+      ],
+    }));
+
+    const input = {
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+    } as const;
+    expect(state.store.assess(input, 30)).toMatchObject({
+      profit30Cents: "1",
+      capitalCents: "1",
+      eligibilityBasis: "profitability",
+      eligible: true,
+    });
+    expect(state.store.listSecurity({
+      ...input,
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30))).toMatchObject({
+      symbol: "RBG",
+      eligibility: {
+        eligibilityBasis: "profitability",
+      },
+    });
+  });
+
+  it("rolls back failed listing writes and restores the id checkpoint", () => {
+    const state = fixture();
+    const idCheckpoint = state.ids.serialize();
+    const eventCount = new SqliteEventStore(state.db, TEST_RUN_ID).count();
+    state.db.exec(`
+      CREATE TRIGGER securities_test_force_insert_failure
+      BEFORE INSERT ON securities
+      BEGIN SELECT RAISE(ABORT, 'forced securities insert failure'); END;
+    `);
+
+    expect(() => state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30))).toThrow(/forced securities insert failure/);
+
+    expect(state.ids.serialize()).toEqual(idCheckpoint);
+    expect(state.store.market()).toBeNull();
+    expect(state.store.list()).toEqual([]);
+    expect(new SqliteEventStore(state.db, TEST_RUN_ID).count()).toBe(eventCount);
+  });
+
+  it("fails closed when canonical listing evidence is tampered", () => {
+    const state = fixture();
+    const listed = state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30));
+    state.db.exec("DROP TRIGGER securities_identity_immutable");
+    state.db.prepare(`
+      UPDATE securities SET eligibility_canonical = ?
+      WHERE run_id = ? AND id = ?
+    `).run(
+      JSON.stringify(listed.eligibility, null, 2),
+      TEST_RUN_ID,
+      listed.id,
+    );
+
+    expect(() => state.store.get(listed.id)).toThrow(/eligibility is invalid/);
   });
 
   it("rejects a forged direct listing that exceeds the cap table", () => {

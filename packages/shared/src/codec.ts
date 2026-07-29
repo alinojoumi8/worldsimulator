@@ -220,6 +220,14 @@ export class IdFactory {
     return Object.fromEntries(entries) as Record<string, number>;
   }
 
+  restore(state: Record<string, number>): void {
+    const restored = IdFactory.restore(state);
+    this.counters.clear();
+    for (const [prefix, value] of restored.counters) {
+      this.counters.set(prefix, value);
+    }
+  }
+
   static restore(state: Record<string, number>): IdFactory {
     const factory = new IdFactory();
     for (const [prefix, value] of Object.entries(state)) {

@@ -95,6 +95,11 @@ describe("IdFactory", () => {
     ids.next("agt");
     const restored = IdFactory.restore(ids.serialize());
     expect(restored.next("agt")).toBe("agt_00000003");
+
+    ids.next("txn");
+    ids.restore({ agt: 1, txn: 3 });
+    expect(ids.next("agt")).toBe("agt_00000002");
+    expect(ids.next("txn")).toBe("txn_00000004");
   });
 
   it("rejects invalid prefixes and corrupt state", () => {

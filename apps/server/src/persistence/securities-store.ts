@@ -6,7 +6,11 @@ import {
   canonicalStringify,
   EngineError,
   listSecurityInputSchema,
+  RIVERBEND_SECURITIES_AUCTION_SCHEDULE,
   RIVERBEND_SECURITIES_EXCHANGE_ID,
+  RIVERBEND_SECURITIES_PRICE_BAND_BP,
+  SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
+  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
   securitiesListingEligibilityAssessmentSchema,
   securitiesMarketOpenedPayloadSchema,
   securitiesMarketSchema,
@@ -20,12 +24,6 @@ import {
 import type { TickContext } from "@worldtangle/engine";
 import { toSafeNumber, type WorldDatabase } from "./database";
 
-export const RIVERBEND_SECURITIES_PRICE_BAND_BP = 2_000;
-export const RIVERBEND_SECURITIES_AUCTION_SCHEDULE = Object.freeze({
-  frequencyTicks: 1,
-  offsetTick: 0,
-});
-
 interface CompanyListingRow {
   readonly company_kind: "opening" | "dynamic";
   readonly total_shares: string;
@@ -36,7 +34,6 @@ interface CompanyListingRow {
 }
 
 interface AccountRow {
-  readonly id: string;
   readonly balance_cents: string;
 }
 
@@ -76,6 +73,13 @@ export interface ListSecurityCommand extends ListSecurityInput {
   readonly triggerEventId: string;
 }
 
+const PROFIT_REVENUE_KINDS = new Set<string>(
+  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
+);
+const PROFIT_COST_KINDS = new Set<string>(
+  SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
+);
+
 function parseCanonical<T>(
   text: string,
   description: string,
@@ -109,25 +113,36 @@ export class SqliteSecuritiesStore {
     }
     const input = listSecurityInputSchema.parse(rawInput);
     const company = this.company(input.companyId);
-    const account = this.companyAccount(input.companyId);
-    const profit30Cents = this.profit30Cents(account.id, tick);
+    const accounts = this.companyAccounts(input.companyId);
+    const capitalCents = accounts.reduce(
+      (maximum, account) => {
+        const balance = BigInt(account.balance_cents);
+        return balance > maximum ? balance : maximum;
+      },
+      BigInt(accounts[0]!.balance_cents),
+    ).toString();
+    const profit30Cents = this.profit30Cents(input.companyId, tick);
     const companyActive = company.company_kind === "opening"
       ? company.wound_down === 0n
       : company.status === "active";
-    const foundedTick = company.company_kind === "opening"
-      ? 0
-      : company.activated_tick === null
-        ? company.founded_tick === null
-          ? 0
-          : toSafeNumber(company.founded_tick, "company founding tick")
-        : toSafeNumber(company.activated_tick, "company activation tick");
+    let foundedTick = 0;
+    if (company.company_kind === "dynamic") {
+      const provenanceTick = company.activated_tick ?? company.founded_tick;
+      if (provenanceTick === null) {
+        throw new EngineError(
+          "CONFLICT",
+          `company ${input.companyId} lacks listing-age provenance`,
+        );
+      }
+      foundedTick = toSafeNumber(provenanceTick, "company eligibility age tick");
+    }
     return assessSecuritiesListingEligibility({
       companyId: input.companyId,
       assessedTick: tick,
       foundedTick,
       companyActive,
       profit30Cents,
-      capitalCents: account.balance_cents,
+      capitalCents,
       totalShares: company.total_shares,
       requestedShares: input.sharesListed,
     });
@@ -141,100 +156,112 @@ export class SqliteSecuritiesStore {
       sharesListed: rawInput.sharesListed,
       referencePriceCents: rawInput.referencePriceCents,
     });
-    this.assertTrigger(rawInput.triggerEventId);
-    const eligibility = this.assess(input, ctx.tick);
-    if (!eligibility.eligible) {
-      throw new EngineError(
-        "VALIDATION_FAILED",
-        `company ${input.companyId} is not eligible to list`,
-        { assessment: eligibility },
-      );
-    }
-    const duplicate = this.db.prepare<
-      [string, string, string],
-      { id: string }
-    >(`
-      SELECT id FROM securities
-      WHERE run_id = ? AND (company_id = ? OR symbol = ?)
-      ORDER BY id LIMIT 1
-    `).get(this.runId, input.companyId, input.symbol);
-    if (duplicate !== undefined) {
-      throw new EngineError(
-        "CONFLICT",
-        `company ${input.companyId} or symbol ${input.symbol} is already listed`,
-      );
-    }
+    const idCheckpoint = ctx.ids.serialize();
+    try {
+      return this.atomic(() => {
+        this.assertTrigger(rawInput.triggerEventId);
+        const eligibility = this.assess(input, ctx.tick);
+        if (!eligibility.eligible) {
+          throw new EngineError(
+            "VALIDATION_FAILED",
+            `company ${input.companyId} is not eligible to list`,
+            { assessment: eligibility },
+          );
+        }
+        const duplicate = this.db.prepare<
+          [string, string, string],
+          { id: string }
+        >(`
+          SELECT id FROM securities
+          WHERE run_id = ? AND (company_id = ? OR symbol = ?)
+          ORDER BY id LIMIT 1
+        `).get(this.runId, input.companyId, input.symbol);
+        if (duplicate !== undefined) {
+          throw new EngineError(
+            "CONFLICT",
+            `company ${input.companyId} or symbol ${input.symbol} is already listed`,
+          );
+        }
 
-    return this.atomic(() => {
-      let market = this.market();
-      if (market === null) {
-        const marketId = ctx.ids.next("mkt");
-        const openedPayload = securitiesMarketOpenedPayloadSchema.parse({
-          marketId,
-          operatorInstitutionId: RIVERBEND_SECURITIES_EXCHANGE_ID,
-          priceBandBp: RIVERBEND_SECURITIES_PRICE_BAND_BP,
-          openedTick: ctx.tick,
-        });
-        const openedEvent = ctx.emit(
-          "market.securities.opened",
-          openedPayload,
-          {
-            actor: {
-              kind: "institution",
-              id: RIVERBEND_SECURITIES_EXCHANGE_ID,
+        let market = this.market();
+        if (market !== null && market.status !== "open") {
+          throw new EngineError(
+            "CONFLICT",
+            `securities market ${market.id} is ${market.status}`,
+          );
+        }
+        if (market === null) {
+          const marketId = ctx.ids.next("mkt");
+          const openedPayload = securitiesMarketOpenedPayloadSchema.parse({
+            marketId,
+            operatorInstitutionId: RIVERBEND_SECURITIES_EXCHANGE_ID,
+            priceBandBp: RIVERBEND_SECURITIES_PRICE_BAND_BP,
+            openedTick: ctx.tick,
+          });
+          const openedEvent = ctx.emit(
+            "market.securities.opened",
+            openedPayload,
+            {
+              actor: {
+                kind: "institution",
+                id: RIVERBEND_SECURITIES_EXCHANGE_ID,
+              },
+              schemaVersion: 1,
+              correlationId: marketId,
+              causationId: rawInput.triggerEventId,
             },
-            schemaVersion: 1,
-            correlationId: marketId,
-            causationId: rawInput.triggerEventId,
-          },
-        );
-        market = securitiesMarketSchema.parse({
-          id: marketId,
-          runId: this.runId,
-          kind: "securities",
-          operatorInstitutionId: RIVERBEND_SECURITIES_EXCHANGE_ID,
-          auctionSchedule: RIVERBEND_SECURITIES_AUCTION_SCHEDULE,
-          priceBandBp: RIVERBEND_SECURITIES_PRICE_BAND_BP,
-          status: "open",
-          openedTick: ctx.tick,
-          sourceEventId: openedEvent.eventId,
-        });
-        this.insertMarket(market);
-      }
+          );
+          market = securitiesMarketSchema.parse({
+            id: marketId,
+            runId: this.runId,
+            kind: "securities",
+            operatorInstitutionId: RIVERBEND_SECURITIES_EXCHANGE_ID,
+            auctionSchedule: RIVERBEND_SECURITIES_AUCTION_SCHEDULE,
+            priceBandBp: RIVERBEND_SECURITIES_PRICE_BAND_BP,
+            status: "open",
+            openedTick: ctx.tick,
+            sourceEventId: openedEvent.eventId,
+          });
+          this.insertMarket(market);
+        }
 
-      const securityId = ctx.ids.next("sec");
-      const listedPayload = securityListedPayloadSchema.parse({
-        securityId,
-        companyId: input.companyId,
-        symbol: input.symbol,
-        sharesListed: input.sharesListed,
-        referencePrice: input.referencePriceCents,
+        const securityId = ctx.ids.next("sec");
+        const listedPayload = securityListedPayloadSchema.parse({
+          securityId,
+          companyId: input.companyId,
+          symbol: input.symbol,
+          sharesListed: input.sharesListed,
+          referencePrice: input.referencePriceCents,
+        });
+        const listedEvent = ctx.emit("security.listed", listedPayload, {
+          actor: {
+            kind: "institution",
+            id: RIVERBEND_SECURITIES_EXCHANGE_ID,
+          },
+          schemaVersion: 1,
+          correlationId: securityId,
+          causationId: rawInput.triggerEventId,
+        });
+        const security = securitySchema.parse({
+          id: securityId,
+          runId: this.runId,
+          marketId: market.id,
+          companyId: input.companyId,
+          symbol: input.symbol,
+          sharesListed: input.sharesListed,
+          referencePriceCents: input.referencePriceCents,
+          listedTick: ctx.tick,
+          status: "listed",
+          eligibility,
+          sourceEventId: listedEvent.eventId,
+        });
+        this.insertSecurity(security);
+        return security;
       });
-      const listedEvent = ctx.emit("security.listed", listedPayload, {
-        actor: {
-          kind: "institution",
-          id: RIVERBEND_SECURITIES_EXCHANGE_ID,
-        },
-        schemaVersion: 1,
-        correlationId: securityId,
-        causationId: rawInput.triggerEventId,
-      });
-      const security = securitySchema.parse({
-        id: securityId,
-        runId: this.runId,
-        marketId: market.id,
-        companyId: input.companyId,
-        symbol: input.symbol,
-        sharesListed: input.sharesListed,
-        referencePriceCents: input.referencePriceCents,
-        listedTick: ctx.tick,
-        status: "listed",
-        eligibility,
-        sourceEventId: listedEvent.eventId,
-      });
-      this.insertSecurity(security);
-      return security;
-    });
+    } catch (error) {
+      ctx.ids.restore(idCheckpoint);
+      throw error;
+    }
   }
 
   market(): SecuritiesMarket | null {
@@ -244,6 +271,7 @@ export class SqliteSecuritiesStore {
         source_event_id
       FROM securities_markets
       WHERE run_id = ? AND kind = 'securities'
+      ORDER BY id LIMIT 1
     `).get(this.runId);
     return row === undefined ? null : this.mapMarket(row);
   }
@@ -293,23 +321,23 @@ export class SqliteSecuritiesStore {
     return row;
   }
 
-  private companyAccount(companyId: string): AccountRow {
-    const row = this.db.prepare<[string, string], AccountRow>(`
-      SELECT id, balance_cents FROM bank_accounts
+  private companyAccounts(companyId: string): readonly AccountRow[] {
+    const rows = this.db.prepare<[string, string], AccountRow>(`
+      SELECT balance_cents FROM bank_accounts
       WHERE run_id = ? AND owner_kind = 'company' AND owner_id = ?
         AND account_type = 'checking' AND status = 'active'
-      ORDER BY id LIMIT 1
-    `).get(this.runId, companyId);
-    if (row === undefined) {
+      ORDER BY id
+    `).all(this.runId, companyId);
+    if (rows.length === 0) {
       throw new EngineError(
         "CONFLICT",
         `company ${companyId} lacks an active checking account`,
       );
     }
-    return row;
+    return rows;
   }
 
-  private profit30Cents(accountId: string, assessedTick: number): string {
+  private profit30Cents(companyId: string, assessedTick: number): string {
     const flows = this.db.prepare<
       [string, string, number, number],
       FlowRow
@@ -319,12 +347,17 @@ export class SqliteSecuritiesStore {
       JOIN ledger_transactions transaction_row
         ON transaction_row.run_id = leg.run_id
         AND transaction_row.id = leg.transaction_id
-      WHERE leg.run_id = ? AND leg.account_id = ?
+      JOIN bank_accounts account
+        ON account.run_id = leg.run_id AND account.id = leg.account_id
+        AND account.owner_kind = 'company' AND account.owner_id = ?
+        AND account.account_type = 'checking' AND account.status = 'active'
+      WHERE leg.run_id = ?
         AND transaction_row.tick BETWEEN ? AND ?
-      ORDER BY transaction_row.tick, transaction_row.id, leg.leg_index
+      ORDER BY transaction_row.tick, transaction_row.id,
+        leg.leg_index, account.id
     `).all(
+      companyId,
       this.runId,
-      accountId,
       Math.max(0, assessedTick - 29),
       assessedTick,
     );
@@ -334,14 +367,12 @@ export class SqliteSecuritiesStore {
       const amount = BigInt(flow.amount_cents);
       if (
         flow.direction === "debit" &&
-        (flow.kind === "purchase" || flow.kind === "row_settlement")
+        PROFIT_REVENUE_KINDS.has(flow.kind)
       ) {
         revenue += amount;
       } else if (
         flow.direction === "credit" &&
-        flow.kind !== "transfer" &&
-        flow.kind !== "mint" &&
-        flow.kind !== "loan_disbursement"
+        PROFIT_COST_KINDS.has(flow.kind)
       ) {
         costs += amount;
       }
