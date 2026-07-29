@@ -162,7 +162,8 @@ emerged naturally from Riverbend. For shadow and external arms, real-agent
 participation is established separately by the manifested tool-call trajectory
 and terminal provider token evidence for every scheduled citizen/tick turn;
 native participation is evidenced by authoritative engine records.
-The generator also inspects and pins the Hermes, Python, and OpenAI SDK versions.
+The generator also inspects and pins the Hermes, Python, OpenAI SDK, MCP SDK,
+Starlette, and aiohttp versions.
 `--provider-env` is a comma-separated allowlist of environment-variable names,
 never values. The report computes Hermes cost from the API's terminal token
 usage and the pinned prices.
