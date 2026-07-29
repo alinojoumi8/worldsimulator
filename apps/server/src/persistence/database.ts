@@ -4946,7 +4946,9 @@ const PHASE_9_SECURITIES_LISTINGS = `
 CREATE TABLE securities_markets (
   run_id TEXT NOT NULL REFERENCES simulation_runs(id),
   id TEXT NOT NULL CHECK (
-    id GLOB 'mkt_[0-9a-z]*' AND length(id) >= 12
+    id GLOB 'mkt_[0-9a-z]*' AND
+    id NOT GLOB 'mkt_*[^0-9a-z]*' AND
+    length(id) >= 12
   ),
   kind TEXT NOT NULL CHECK (kind = 'securities'),
   operator_institution_id TEXT NOT NULL CHECK (
@@ -4969,7 +4971,9 @@ CREATE TABLE securities_markets (
 CREATE TABLE securities (
   run_id TEXT NOT NULL REFERENCES simulation_runs(id),
   id TEXT NOT NULL CHECK (
-    id GLOB 'sec_[0-9a-z]*' AND length(id) >= 12
+    id GLOB 'sec_[0-9a-z]*' AND
+    id NOT GLOB 'sec_*[^0-9a-z]*' AND
+    length(id) >= 12
   ),
   market_id TEXT NOT NULL,
   company_id TEXT NOT NULL,

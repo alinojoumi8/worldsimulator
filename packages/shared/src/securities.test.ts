@@ -191,6 +191,10 @@ describe("securities listing eligibility", () => {
     }).success).toBe(true);
     expect(securitiesListingEligibilityInputSchema.safeParse({
       ...eligibleInput,
+      capitalCents: "-9223372036854775808",
+    }).success).toBe(true);
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
       capitalCents: "9223372036854775808",
     }).success).toBe(false);
     expect(securitiesListingEligibilityInputSchema.safeParse({

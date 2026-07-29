@@ -36,7 +36,7 @@ import {
 const temporaryDirectories: string[] = [];
 const EXPECTED_MIGRATION_COUNT = BigInt(WORLD_DATABASE_MIGRATION_COUNT);
 const PHASE_9_SECURITIES_LISTINGS_CHECKSUM =
-  "de234ea69eb5a99df3d2e9256922cb42ade962675721832850269d489124c1c5";
+  "05a25d8d7ede810f1a686ff220bd9795ce568a6da72903afdc8def98861b85db";
 
 function temporaryDirectory(): string {
   const path = mkdtempSync(join(tmpdir(), "worldtangle-db-"));
@@ -1094,6 +1094,14 @@ describe("world database", () => {
       SELECT name FROM sqlite_schema
       WHERE type = 'table' AND name = 'securities'
     `).get()?.name).toBe("securities");
+    expect(upgraded.prepare<[], { sql: string }>(`
+      SELECT sql FROM sqlite_schema
+      WHERE type = 'table' AND name = 'securities_markets'
+    `).get()?.sql).toContain("id NOT GLOB 'mkt_*[^0-9a-z]*'");
+    expect(upgraded.prepare<[], { sql: string }>(`
+      SELECT sql FROM sqlite_schema
+      WHERE type = 'table' AND name = 'securities'
+    `).get()?.sql).toContain("id NOT GLOB 'sec_*[^0-9a-z]*'");
     expect(upgraded.prepare<[], { count: bigint }>(`
       SELECT COUNT(*) AS count FROM sqlite_schema
       WHERE type = 'trigger'
