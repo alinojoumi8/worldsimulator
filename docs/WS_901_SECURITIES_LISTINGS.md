@@ -11,7 +11,7 @@ The shared contract fixes the pilot policy as `riverbend_listing_v1`. Symbols ar
 `SqliteSecuritiesStore.listSecurity` performs one bounded path:
 
 1. Strictly parse the command and verify its causal trigger.
-2. Recompute company status, age, trailing profit, active checking balance, and current cap table from authoritative projections.
+2. Require the run's currently executing next tick, then recompute company status, age, trailing profit, active checking balance, and current cap table from authoritative projections.
 3. Reject malformed, ineligible, or duplicate company/symbol requests before consuming IDs.
 4. Open the singleton Riverbend securities market when needed and emit `market.securities.opened`.
 5. Emit the exact documented `security.listed` payload and persist its eligibility receipt.
@@ -27,6 +27,8 @@ Migration 36 adds `securities_markets` and `securities`. Constraints and trigger
 - an active company with the required age and capital-or-profit basis;
 - listed shares within the authoritative cap-table total;
 - exact typed opening/listing source events and eligibility fields;
+- listing only at `simulation_runs.current_tick + 1`, so current account balances are
+  never certified as a historical capital snapshot;
 - immutable listing identity and controlled market/security status transitions; and
 - no destructive deletion of authoritative market or listing rows.
 
@@ -48,5 +50,5 @@ pnpm build
 ```
 
 Verified on 2026-07-28: all four commands passed. Vitest reported 145 files
-and 772 tests green; the production build completed with only the existing
+and 776 tests green; the production build completed with only the existing
 chunk-size advisory.

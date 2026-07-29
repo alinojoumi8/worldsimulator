@@ -5014,7 +5014,7 @@ CREATE INDEX securities_market_feed
 
 CREATE TRIGGER securities_markets_validate_source
 BEFORE INSERT ON securities_markets
-WHEN NOT EXISTS (
+WHEN NEW.status <> 'open' OR NOT EXISTS (
   SELECT 1 FROM events event
   WHERE event.run_id = NEW.run_id AND event.event_id = NEW.source_event_id
     AND event.type = 'market.securities.opened'
@@ -5052,6 +5052,10 @@ CREATE TRIGGER securities_validate_listing
 BEFORE INSERT ON securities
 WHEN
   NEW.status <> 'listed' OR
+  NOT EXISTS (
+    SELECT 1 FROM simulation_runs run
+    WHERE run.id = NEW.run_id AND NEW.listed_tick = run.current_tick + 1
+  ) OR
   NOT EXISTS (
     SELECT 1 FROM securities_markets market
     WHERE market.run_id = NEW.run_id AND market.id = NEW.market_id

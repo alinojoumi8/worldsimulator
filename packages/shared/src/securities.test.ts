@@ -201,6 +201,16 @@ describe("securities listing eligibility", () => {
       ...eligibleInput,
       capitalCents: "-9223372036854775809",
     }).success).toBe(false);
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
+      capitalCents: "10000000000000000000",
+    }).success).toBe(false);
+    expect(listSecurityInputSchema.safeParse({
+      companyId: eligibleInput.companyId,
+      symbol: "RBG",
+      sharesListed: "10000000000000000000",
+      referencePriceCents: "1250",
+    }).success).toBe(false);
   });
 });
 

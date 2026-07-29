@@ -14,11 +14,11 @@ function withinSignedSqliteRange(value: string): boolean {
   }
 }
 
-const signedIntegerSchema = z.string().regex(/^(?:0|-?[1-9]\d*)$/)
+const signedIntegerSchema = z.string().regex(/^(?:0|-?[1-9]\d{0,18})$/)
   .refine(withinSignedSqliteRange, {
     message: "integer exceeds the authoritative SQLite range",
   });
-const positiveIntegerSchema = z.string().regex(/^[1-9]\d*$/)
+const positiveIntegerSchema = z.string().regex(/^[1-9]\d{0,18}$/)
   .refine(withinSignedSqliteRange, {
     message: "integer exceeds the authoritative SQLite range",
   });

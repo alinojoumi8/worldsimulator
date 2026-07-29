@@ -34,9 +34,9 @@ import {
 } from "./test-helpers";
 
 const temporaryDirectories: string[] = [];
-const EXPECTED_MIGRATION_COUNT = BigInt(WORLD_DATABASE_MIGRATION_COUNT);
+const EXPECTED_MIGRATION_COUNT = 36n;
 const PHASE_9_SECURITIES_LISTINGS_CHECKSUM =
-  "90b46ede455d172d3c3bf1f1fe6e4db3051ee1f7c873acdec34a909e755f2683";
+  "a92e05edd4284c216e1a082044007f73bb8ca1f0d4ba03d04ea65f29f30e374c";
 
 function temporaryDirectory(): string {
   const path = mkdtempSync(join(tmpdir(), "worldtangle-db-"));
@@ -51,6 +51,11 @@ afterEach(() => {
 });
 
 describe("world database", () => {
+  it("pins the exported migration count", () => {
+    expect(BigInt(WORLD_DATABASE_MIGRATION_COUNT))
+      .toBe(EXPECTED_MIGRATION_COUNT);
+  });
+
   it("builds a safe per-run path and rejects traversal", () => {
     const dataDir = temporaryDirectory();
     expect(worldDatabasePath(dataDir, "sim_00000001", "run_00000001")).toBe(

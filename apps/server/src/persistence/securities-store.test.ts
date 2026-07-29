@@ -107,6 +107,9 @@ function fixture() {
   const ids = IdFactory.restore(population.idState);
   const finance = new SqliteFinanceStore(db, TEST_RUN_ID);
   const financeGenesis = finance.initialize(population, ids);
+  db.prepare(`
+    UPDATE simulation_runs SET current_tick = 29 WHERE id = ?
+  `).run(TEST_RUN_ID);
   const company = db.prepare<[string], {
     account_id: string;
     company_id: string;
@@ -147,12 +150,22 @@ function fixture() {
   };
 }
 
+function setRunCurrentTick(
+  state: ReturnType<typeof fixture>,
+  tick: number,
+): void {
+  state.db.prepare(`
+    UPDATE simulation_runs SET current_tick = ? WHERE id = ?
+  `).run(tick, TEST_RUN_ID);
+}
+
 function insertRawMarket(
   state: ReturnType<typeof fixture>,
   input: {
     readonly id: string;
     readonly sourceEventId: string;
     readonly tick: number;
+    readonly status?: "open" | "halted" | "closed";
   },
 ): void {
   state.db.prepare(`
@@ -160,11 +173,12 @@ function insertRawMarket(
       run_id, id, kind, operator_institution_id,
       auction_schedule_canonical, price_band_bp, status, opened_tick,
       source_event_id
-    ) VALUES (?, ?, 'securities', 'inst_riverbend_exchange', ?, 2000, 'open', ?, ?)
+    ) VALUES (?, ?, 'securities', 'inst_riverbend_exchange', ?, 2000, ?, ?, ?)
   `).run(
     TEST_RUN_ID,
     input.id,
     canonicalStringify({ frequencyTicks: 1, offsetTick: 0 }),
+    input.status ?? "open",
     input.tick,
     input.sourceEventId,
   );
@@ -351,6 +365,12 @@ describe("SqliteSecuritiesStore", () => {
         causationId: state.triggerEventId,
       },
     );
+    expect(() => insertRawMarket(state, {
+      id: marketId,
+      sourceEventId: marketEvent.eventId,
+      tick: 30,
+      status: "halted",
+    })).toThrow(/exact opening event/);
     insertRawMarket(state, {
       id: marketId,
       sourceEventId: marketEvent.eventId,
@@ -390,6 +410,86 @@ describe("SqliteSecuritiesStore", () => {
       eligibility,
       sourceEventId: listingEvent.eventId,
     })).toThrow(/CHECK constraint failed/);
+    expect(state.store.list()).toEqual([]);
+  });
+
+  it("rejects a listing outside the currently executing next tick", () => {
+    const state = fixture();
+    const checkpoint = state.ids.serialize();
+    const eventCount = new SqliteEventStore(state.db, TEST_RUN_ID).count();
+
+    expect(() => state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 31))).toThrow(/eligibility or evidence/);
+
+    expect(state.ids.serialize()).toEqual(checkpoint);
+    expect(state.store.market()).toBeNull();
+    expect(state.store.list()).toEqual([]);
+    expect(new SqliteEventStore(state.db, TEST_RUN_ID).count()).toBe(eventCount);
+  });
+
+  it("rejects listing through a halted market without consuming ids", () => {
+    const state = fixture();
+    const marketId = "mkt_hhhhhhhh";
+    const marketEvent = context(state.db, state.ids, 30).emit(
+      "market.securities.opened",
+      {
+        marketId,
+        operatorInstitutionId: "inst_riverbend_exchange",
+        priceBandBp: 2000,
+        openedTick: 30,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: marketId,
+        causationId: state.triggerEventId,
+      },
+    );
+    insertRawMarket(state, {
+      id: marketId,
+      sourceEventId: marketEvent.eventId,
+      tick: 30,
+    });
+    state.db.prepare(`
+      UPDATE securities_markets SET status = 'halted'
+      WHERE run_id = ? AND id = ?
+    `).run(TEST_RUN_ID, marketId);
+    const checkpoint = state.ids.serialize();
+
+    expect(() => state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30))).toThrow(/market .* is halted/);
+
+    expect(state.ids.serialize()).toEqual(checkpoint);
+    expect(state.store.list()).toEqual([]);
+  });
+
+  it("rejects a TickContext from another run before writing", () => {
+    const state = fixture();
+    const checkpoint = state.ids.serialize();
+    const otherRunContext = {
+      ...context(state.db, state.ids, 30),
+      runId: "run_zzzzzzzz",
+    };
+
+    expect(() => state.store.listSecurity({
+      companyId: state.companyId,
+      symbol: "RBG",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+      triggerEventId: state.triggerEventId,
+    }, otherRunContext)).toThrow(/another run/);
+
+    expect(state.ids.serialize()).toEqual(checkpoint);
+    expect(state.store.market()).toBeNull();
     expect(state.store.list()).toEqual([]);
   });
 
@@ -511,6 +611,7 @@ describe("SqliteSecuritiesStore", () => {
         causationId: capitalState.triggerEventId,
       },
     );
+    setRunCurrentTick(capitalState, 30);
     expect(() => insertRawSecurity(capitalState, {
       id: forgedProfitabilityId,
       marketId: capitalListing.marketId,
@@ -597,6 +698,7 @@ describe("SqliteSecuritiesStore", () => {
         causationId: profitState.triggerEventId,
       },
     );
+    setRunCurrentTick(profitState, 30);
     expect(() => insertRawSecurity(profitState, {
       id: forgedCapitalId,
       marketId: profitListing.marketId,
@@ -750,6 +852,7 @@ describe("SqliteSecuritiesStore", () => {
       },
     };
 
+    setRunCurrentTick(state, 30);
     expect(() => state.db.prepare(`
       INSERT INTO securities(
         run_id, id, market_id, company_id, symbol, shares_listed,

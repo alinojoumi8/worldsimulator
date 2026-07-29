@@ -335,7 +335,12 @@ export class SqliteSecuritiesStore {
 
   private profit30Cents(companyId: string, assessedTick: number): string {
     const flows = this.db.prepare<
-      [string, string, number, number],
+      {
+        companyId: string;
+        runId: string;
+        windowStartTick: number;
+        assessedTick: number;
+      },
       FlowRow
     >(`
       SELECT leg.direction, leg.amount_cents, transaction_row.kind
@@ -345,18 +350,18 @@ export class SqliteSecuritiesStore {
         AND transaction_row.id = leg.transaction_id
       JOIN bank_accounts account
         ON account.run_id = leg.run_id AND account.id = leg.account_id
-        AND account.owner_kind = 'company' AND account.owner_id = ?
+        AND account.owner_kind = 'company' AND account.owner_id = @companyId
         AND account.account_type = 'checking' AND account.status = 'active'
-      WHERE leg.run_id = ?
-        AND transaction_row.tick BETWEEN ? AND ?
+      WHERE leg.run_id = @runId
+        AND transaction_row.tick BETWEEN @windowStartTick AND @assessedTick
       ORDER BY transaction_row.tick, transaction_row.id,
         leg.leg_index, account.id
-    `).all(
+    `).all({
       companyId,
-      this.runId,
-      Math.max(0, assessedTick - 29),
+      runId: this.runId,
+      windowStartTick: Math.max(0, assessedTick - 29),
       assessedTick,
-    );
+    });
     let revenue = 0n;
     let costs = 0n;
     for (const flow of flows) {
