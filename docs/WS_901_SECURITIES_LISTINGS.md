@@ -35,8 +35,8 @@ Logical state-hash version 27 includes both projections so replay and snapshot c
 ## Verification coverage
 
 - Shared rule tests cover age, active status, profitability, capitalization, cap-table bounds, strict schemas, and signed-SQLite limits.
-- Persistence integration covers exact events, duplicate rejection without ID consumption, logical-hash inclusion, database reopen, and forged direct-listing rejection.
-- Migration coverage proves 35→36 upgrade and rollback behavior while preserving existing reopen checks.
+- Persistence integration covers exact events, duplicate rejection without ID consumption, nested listing-write rollback, logical-hash inclusion, database reopen, and forged direct-listing rejection.
+- Migration coverage proves 35-to-36 upgrade and reopen behavior.
 
 Required handoff gate:
 
@@ -48,5 +48,5 @@ pnpm build
 ```
 
 Verified on 2026-07-28: all four commands passed. Vitest reported 145 files
-and 770 tests green; the production build completed with only the existing
+and 772 tests green; the production build completed with only the existing
 chunk-size advisory.

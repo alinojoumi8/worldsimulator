@@ -9,6 +9,7 @@ import {
   ledgerTransactionSchema,
   Rng,
   type EventEnvelope,
+  type SecuritiesListingEligibilityAssessment,
 } from "@worldtangle/shared";
 import {
   generateRiverbendPopulation,
@@ -146,6 +147,62 @@ function fixture() {
   };
 }
 
+function insertRawMarket(
+  state: ReturnType<typeof fixture>,
+  input: {
+    readonly id: string;
+    readonly sourceEventId: string;
+    readonly tick: number;
+  },
+): void {
+  state.db.prepare(`
+    INSERT INTO securities_markets(
+      run_id, id, kind, operator_institution_id,
+      auction_schedule_canonical, price_band_bp, status, opened_tick,
+      source_event_id
+    ) VALUES (?, ?, 'securities', 'inst_riverbend_exchange', ?, 2000, 'open', ?, ?)
+  `).run(
+    TEST_RUN_ID,
+    input.id,
+    canonicalStringify({ frequencyTicks: 1, offsetTick: 0 }),
+    input.tick,
+    input.sourceEventId,
+  );
+}
+
+function insertRawSecurity(
+  state: ReturnType<typeof fixture>,
+  input: {
+    readonly id: string;
+    readonly marketId: string;
+    readonly symbol: string;
+    readonly sharesListed: string;
+    readonly referencePriceCents: string;
+    readonly listedTick: number;
+    readonly eligibility: SecuritiesListingEligibilityAssessment;
+    readonly sourceEventId: string;
+  },
+): void {
+  state.db.prepare(`
+    INSERT INTO securities(
+      run_id, id, market_id, company_id, symbol, shares_listed,
+      reference_price_cents, listed_tick, status, eligibility_canonical,
+      source_event_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'listed', ?, ?)
+  `).run(
+    TEST_RUN_ID,
+    input.id,
+    input.marketId,
+    state.companyId,
+    input.symbol,
+    input.sharesListed,
+    input.referencePriceCents,
+    input.listedTick,
+    canonicalStringify(input.eligibility),
+    input.sourceEventId,
+  );
+}
+
 describe("SqliteSecuritiesStore", () => {
   it("enforces age and capital eligibility without consuming ids on rejection", () => {
     const state = fixture();
@@ -256,6 +313,86 @@ describe("SqliteSecuritiesStore", () => {
       .toEqual(listed);
   });
 
+  it("rejects persisted identifiers with invalid suffix characters", () => {
+    const state = fixture();
+    const invalidMarketId = "mkt_a!!!!!!!";
+    const invalidMarketEvent = context(state.db, state.ids, 30).emit(
+      "market.securities.opened",
+      {
+        marketId: invalidMarketId,
+        operatorInstitutionId: "inst_riverbend_exchange",
+        priceBandBp: 2000,
+        openedTick: 30,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: invalidMarketId,
+        causationId: state.triggerEventId,
+      },
+    );
+    expect(() => insertRawMarket(state, {
+      id: invalidMarketId,
+      sourceEventId: invalidMarketEvent.eventId,
+      tick: 30,
+    })).toThrow(/CHECK constraint failed/);
+
+    const marketId = "mkt_zzzzzzzz";
+    const marketEvent = context(state.db, state.ids, 30).emit(
+      "market.securities.opened",
+      {
+        marketId,
+        operatorInstitutionId: "inst_riverbend_exchange",
+        priceBandBp: 2000,
+        openedTick: 30,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: marketId,
+        causationId: state.triggerEventId,
+      },
+    );
+    insertRawMarket(state, {
+      id: marketId,
+      sourceEventId: marketEvent.eventId,
+      tick: 30,
+    });
+
+    const listingInput = {
+      companyId: state.companyId,
+      symbol: "BAD",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+    } as const;
+    const eligibility = state.store.assess(listingInput, 30);
+    const invalidSecurityId = "sec_a!!!!!!!";
+    const listingEvent = context(state.db, state.ids, 30).emit(
+      "security.listed",
+      {
+        securityId: invalidSecurityId,
+        companyId: state.companyId,
+        symbol: listingInput.symbol,
+        sharesListed: listingInput.sharesListed,
+        referencePrice: listingInput.referencePriceCents,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: invalidSecurityId,
+        causationId: state.triggerEventId,
+      },
+    );
+    expect(() => insertRawSecurity(state, {
+      id: invalidSecurityId,
+      marketId,
+      symbol: listingInput.symbol,
+      sharesListed: listingInput.sharesListed,
+      referencePriceCents: listingInput.referencePriceCents,
+      listedTick: 30,
+      eligibility,
+      sourceEventId: listingEvent.eventId,
+    })).toThrow(/CHECK constraint failed/);
+    expect(state.store.list()).toEqual([]);
+  });
+
   it("uses revenue from every active company checking account", () => {
     const state = fixture();
     state.db.prepare(`
@@ -325,6 +462,151 @@ describe("SqliteSecuritiesStore", () => {
         eligibilityBasis: "profitability",
       },
     });
+  });
+
+  it("rejects raw listings with fabricated eligibility amounts and basis", () => {
+    const capitalState = fixture();
+    const capitalInput = {
+      companyId: capitalState.companyId,
+      symbol: "CAP",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+    } as const;
+    const capitalListing = capitalState.store.listSecurity({
+      ...capitalInput,
+      triggerEventId: capitalState.triggerEventId,
+    }, context(capitalState.db, capitalState.ids, 30));
+    const capitalEligibility = capitalState.store.assess(capitalInput, 31);
+    expect(capitalEligibility).toMatchObject({
+      profit30Cents: "0",
+      eligibilityBasis: "capital",
+      checks: { profitability: false, capital: true },
+    });
+    const forgedProfitability = {
+      ...capitalEligibility,
+      profit30Cents: "1",
+      checks: {
+        ...capitalEligibility.checks,
+        profitability: true,
+      },
+      eligibilityBasis: "both",
+    } as const;
+    const forgedProfitabilityId = "sec_zzzzzzza";
+    const forgedProfitabilityEvent = context(
+      capitalState.db,
+      capitalState.ids,
+      31,
+    ).emit(
+      "security.listed",
+      {
+        securityId: forgedProfitabilityId,
+        companyId: capitalState.companyId,
+        symbol: "FPR",
+        sharesListed: capitalInput.sharesListed,
+        referencePrice: capitalInput.referencePriceCents,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: forgedProfitabilityId,
+        causationId: capitalState.triggerEventId,
+      },
+    );
+    expect(() => insertRawSecurity(capitalState, {
+      id: forgedProfitabilityId,
+      marketId: capitalListing.marketId,
+      symbol: "FPR",
+      sharesListed: capitalInput.sharesListed,
+      referencePriceCents: capitalInput.referencePriceCents,
+      listedTick: 31,
+      eligibility: forgedProfitability,
+      sourceEventId: forgedProfitabilityEvent.eventId,
+    })).toThrow(/eligibility or evidence/);
+
+    const profitState = fixture();
+    profitState.db.prepare(`
+      UPDATE bank_accounts SET balance_cents = '0'
+      WHERE run_id = ? AND owner_kind = 'company' AND owner_id = ?
+        AND account_type = 'checking' AND status = 'active'
+    `).run(TEST_RUN_ID, profitState.companyId);
+    profitState.finance.post(ledgerTransactionSchema.parse({
+      id: profitState.ids.next("txn"),
+      runId: TEST_RUN_ID,
+      tick: 30,
+      kind: "purchase",
+      actor: { kind: "system", id: "securities-test" },
+      reason: "profit-only forged listing evidence test",
+      sourceEventId: null,
+      correlationId: "securities-profit-only-forgery",
+      idempotencyKey: "securities-profit-only-forgery",
+      legs: [
+        {
+          accountId: profitState.companyAccountId,
+          direction: "debit",
+          amountCents: "1",
+        },
+        {
+          accountId: profitState.financeGenesis.rowAccountId,
+          direction: "credit",
+          amountCents: "1",
+        },
+      ],
+    }));
+    const profitInput = {
+      companyId: profitState.companyId,
+      symbol: "PRF",
+      sharesListed: "2500",
+      referencePriceCents: "1250",
+    } as const;
+    const profitListing = profitState.store.listSecurity({
+      ...profitInput,
+      triggerEventId: profitState.triggerEventId,
+    }, context(profitState.db, profitState.ids, 30));
+    const profitEligibility = profitState.store.assess(profitInput, 31);
+    expect(profitEligibility).toMatchObject({
+      profit30Cents: "1",
+      capitalCents: "1",
+      eligibilityBasis: "profitability",
+      checks: { profitability: true, capital: false },
+    });
+    const forgedCapital = {
+      ...profitEligibility,
+      capitalCents: "10000000",
+      checks: {
+        ...profitEligibility.checks,
+        capital: true,
+      },
+      eligibilityBasis: "both",
+    } as const;
+    const forgedCapitalId = "sec_zzzzzzzb";
+    const forgedCapitalEvent = context(
+      profitState.db,
+      profitState.ids,
+      31,
+    ).emit(
+      "security.listed",
+      {
+        securityId: forgedCapitalId,
+        companyId: profitState.companyId,
+        symbol: "FCA",
+        sharesListed: profitInput.sharesListed,
+        referencePrice: profitInput.referencePriceCents,
+      },
+      {
+        actor: { kind: "institution", id: "inst_riverbend_exchange" },
+        correlationId: forgedCapitalId,
+        causationId: profitState.triggerEventId,
+      },
+    );
+    expect(() => insertRawSecurity(profitState, {
+      id: forgedCapitalId,
+      marketId: profitListing.marketId,
+      symbol: "FCA",
+      sharesListed: profitInput.sharesListed,
+      referencePriceCents: profitInput.referencePriceCents,
+      listedTick: 31,
+      eligibility: forgedCapital,
+      sourceEventId: forgedCapitalEvent.eventId,
+    })).toThrow(/eligibility or evidence/);
   });
 
   it("rolls back failed listing writes and restores the id checkpoint", () => {

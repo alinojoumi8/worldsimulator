@@ -5074,52 +5074,40 @@ WHEN
       AND json_extract(event.payload_canonical, '$.referencePrice') =
         NEW.reference_price_cents
   ) OR
+  json_type(NEW.eligibility_canonical) IS NOT 'object' OR
+  (SELECT COUNT(*) FROM json_each(NEW.eligibility_canonical)) <> 13 OR
+  json_type(NEW.eligibility_canonical, '$.policy') IS NOT 'object' OR
+  (
+    SELECT COUNT(*)
+    FROM json_each(json_extract(NEW.eligibility_canonical, '$.policy'))
+  ) <> 4 OR
+  json_type(NEW.eligibility_canonical, '$.checks') IS NOT 'object' OR
+  (
+    SELECT COUNT(*)
+    FROM json_each(json_extract(NEW.eligibility_canonical, '$.checks'))
+  ) <> 5 OR
   json_extract(NEW.eligibility_canonical, '$.policy.version') IS NOT
     'riverbend_listing_v1' OR
-  json_extract(NEW.eligibility_canonical, '$.companyId') IS NOT NEW.company_id OR
-  json_extract(NEW.eligibility_canonical, '$.assessedTick') IS NOT NEW.listed_tick OR
-  json_extract(NEW.eligibility_canonical, '$.requestedShares') IS NOT
-    NEW.shares_listed OR
-  json_extract(NEW.eligibility_canonical, '$.eligible') IS NOT 1 OR
-  json_extract(NEW.eligibility_canonical, '$.checks.active') IS NOT 1 OR
-  json_extract(NEW.eligibility_canonical, '$.checks.minimumAge') IS NOT 1 OR
-  json_extract(NEW.eligibility_canonical, '$.checks.sharesWithinTotal') IS NOT 1 OR
-  (
-    json_extract(NEW.eligibility_canonical, '$.checks.profitability') IS NOT 1 AND
-    json_extract(NEW.eligibility_canonical, '$.checks.capital') IS NOT 1
-  ) OR
+  json_extract(NEW.eligibility_canonical, '$.policy.minimumAgeTicks') IS NOT 30 OR
+  json_extract(NEW.eligibility_canonical, '$.policy.minimumProfit30Cents') IS NOT
+    '1' OR
+  json_extract(NEW.eligibility_canonical, '$.policy.minimumCapitalCents') IS NOT
+    '10000000' OR
   NOT EXISTS (
     SELECT 1 FROM company_cap_tables cap
     LEFT JOIN companies company
       ON company.run_id = cap.run_id AND company.id = cap.company_id
-    WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
-      AND cap.total_shares =
-        json_extract(NEW.eligibility_canonical, '$.totalShares')
-      AND CAST(NEW.shares_listed AS INTEGER) <= CAST(cap.total_shares AS INTEGER)
-      AND NOT EXISTS (
-        SELECT 1 FROM company_wind_downs wind_down
-        WHERE wind_down.run_id = cap.run_id
-          AND wind_down.company_id = cap.company_id
-      )
-      AND (
-        (
-          cap.company_kind = 'opening' AND NEW.listed_tick >= 30
-        ) OR (
-          cap.company_kind = 'dynamic' AND company.status = 'active' AND
-          COALESCE(company.activated_tick, company.founded_tick) IS NOT NULL AND
-          NEW.listed_tick -
-            COALESCE(company.activated_tick, company.founded_tick) >= 30
-        )
-      )
-      AND (
+    CROSS JOIN (
+      SELECT
         COALESCE((
           SELECT SUM(CAST(account.balance_cents AS INTEGER))
           FROM bank_accounts account
-          WHERE account.run_id = cap.run_id
+          WHERE account.run_id = NEW.run_id
             AND account.owner_kind = 'company'
-            AND account.owner_id = cap.company_id
+            AND account.owner_id = NEW.company_id
             AND account.account_type = 'checking' AND account.status = 'active'
-        ), 0) >= 10000000 OR (
+        ), 0) AS capital_cents,
+        (
           SELECT COALESCE(SUM(
             CASE
               WHEN leg.direction = 'debit' AND
@@ -5135,19 +5123,89 @@ WHEN
           JOIN ledger_transactions transaction_row
             ON transaction_row.run_id = leg.run_id
             AND transaction_row.id = leg.transaction_id
-          WHERE leg.run_id = cap.run_id
+          WHERE leg.run_id = NEW.run_id
             AND leg.account_id IN (
               SELECT account.id FROM bank_accounts account
-              WHERE account.run_id = cap.run_id
+              WHERE account.run_id = NEW.run_id
                 AND account.owner_kind = 'company'
-                AND account.owner_id = cap.company_id
+                AND account.owner_id = NEW.company_id
                 AND account.account_type = 'checking'
                 AND account.status = 'active'
             )
             AND transaction_row.tick BETWEEN MAX(0, NEW.listed_tick - 29)
               AND NEW.listed_tick
-        ) >= 1
+        ) AS profit30_cents
+    ) amounts
+    WHERE cap.run_id = NEW.run_id AND cap.company_id = NEW.company_id
+      AND NOT EXISTS (
+        SELECT 1 FROM company_wind_downs wind_down
+        WHERE wind_down.run_id = cap.run_id
+          AND wind_down.company_id = cap.company_id
       )
+      AND (
+        cap.company_kind = 'opening' OR
+        (cap.company_kind = 'dynamic' AND company.status = 'active')
+      )
+      AND (
+        CASE
+          WHEN cap.company_kind = 'opening' THEN 0
+          ELSE COALESCE(company.activated_tick, company.founded_tick)
+        END
+      ) IS NOT NULL
+      AND NEW.listed_tick - (
+        CASE
+          WHEN cap.company_kind = 'opening' THEN 0
+          ELSE COALESCE(company.activated_tick, company.founded_tick)
+        END
+      ) >= 30
+      AND CAST(NEW.shares_listed AS INTEGER) <= CAST(cap.total_shares AS INTEGER)
+      AND (amounts.profit30_cents >= 1 OR amounts.capital_cents >= 10000000)
+      AND json_extract(NEW.eligibility_canonical, '$.companyId') IS NEW.company_id
+      AND json_extract(NEW.eligibility_canonical, '$.assessedTick') IS
+        NEW.listed_tick
+      AND json_extract(NEW.eligibility_canonical, '$.foundedTick') IS (
+        CASE
+          WHEN cap.company_kind = 'opening' THEN 0
+          ELSE COALESCE(company.activated_tick, company.founded_tick)
+        END
+      )
+      AND json_extract(NEW.eligibility_canonical, '$.ageTicks') IS
+        NEW.listed_tick - (
+          CASE
+            WHEN cap.company_kind = 'opening' THEN 0
+            ELSE COALESCE(company.activated_tick, company.founded_tick)
+          END
+        )
+      AND json_extract(NEW.eligibility_canonical, '$.companyActive') IS 1
+      AND json_extract(NEW.eligibility_canonical, '$.profit30Cents') IS
+        CAST(amounts.profit30_cents AS TEXT)
+      AND json_extract(NEW.eligibility_canonical, '$.capitalCents') IS
+        CAST(amounts.capital_cents AS TEXT)
+      AND json_extract(NEW.eligibility_canonical, '$.totalShares') IS
+        cap.total_shares
+      AND json_extract(NEW.eligibility_canonical, '$.requestedShares') IS
+        NEW.shares_listed
+      AND json_extract(NEW.eligibility_canonical, '$.checks.active') IS 1
+      AND json_extract(NEW.eligibility_canonical, '$.checks.minimumAge') IS 1
+      AND json_extract(NEW.eligibility_canonical, '$.checks.profitability') IS
+        (amounts.profit30_cents >= 1)
+      AND json_extract(NEW.eligibility_canonical, '$.checks.capital') IS
+        (amounts.capital_cents >= 10000000)
+      AND json_extract(NEW.eligibility_canonical, '$.checks.sharesWithinTotal') IS
+        (
+          CAST(NEW.shares_listed AS INTEGER) <=
+            CAST(cap.total_shares AS INTEGER)
+        )
+      AND json_extract(NEW.eligibility_canonical, '$.eligibilityBasis') IS (
+        CASE
+          WHEN amounts.profit30_cents >= 1 AND amounts.capital_cents >= 10000000
+            THEN 'both'
+          WHEN amounts.profit30_cents >= 1 THEN 'profitability'
+          WHEN amounts.capital_cents >= 10000000 THEN 'capital'
+          ELSE NULL
+        END
+      )
+      AND json_extract(NEW.eligibility_canonical, '$.eligible') IS 1
   )
 BEGIN SELECT RAISE(ABORT, 'security listing fails eligibility or evidence rules'); END;
 
