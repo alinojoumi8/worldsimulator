@@ -29,11 +29,15 @@ import {
   type RunManifestAgentLab,
 } from "@worldtangle/shared";
 import {
+  parseHermesRunsForArtifact,
   sanitizedRejectedHermesValue,
   verifyTrialArtifact,
 } from "./artifact";
 import { formatCliError, parseArguments } from "./cli";
-import { createPilotManifest } from "./create-manifest";
+import {
+  createPilotManifest,
+  PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK,
+} from "./create-manifest";
 import {
   agentLabDriverPolicy,
   agentLabDriverPolicyDigest,
@@ -1000,6 +1004,29 @@ describe("Agent Lab harness", () => {
     expect(serialized).not.toContain(sessionSecret);
     expect(serialized).not.toContain("bearer-secret-00000001");
     expect(serialized.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("redacts credentials from rejected Hermes errors and anomaly details", () => {
+    const providerSecret = "minimax-value-00000001";
+    const anomalies: string[] = [];
+    const evidence = parseHermesRunsForArtifact([{
+      runId: "hermes-run-one",
+      agentId: "agt_00000001",
+      targetTick: 10,
+      status: "completed",
+      inputTokens: 100,
+      outputTokens: 20,
+      latencyMs: 15,
+      budgetViolations: [],
+      [providerSecret]: "unrecognized field",
+    }], anomalies, [providerSecret]);
+    const serialized = canonicalStringify({ evidence, anomalies });
+
+    expect(evidence.accepted).toHaveLength(0);
+    expect(evidence.rejected).toHaveLength(1);
+    expect(serialized).not.toContain(providerSecret);
+    expect(evidence.rejected[0]?.error).toContain("[REDACTED]");
+    expect(anomalies[0]).toContain("[REDACTED]");
   });
 
   it("keeps expected and observed fixture matrix ordering aligned", () => {
@@ -2763,16 +2790,37 @@ describe("Agent Lab harness", () => {
       maxOutputTokens: 8_000,
       maxToolCalls: 8,
     });
-    expect(created.scenario.budgets.perAgentDailyTokens).toBe(72_000);
-    expect(created.scenario.budgets.runCostCentsMax).toBe("212");
+    const worstCaseTurnTokens =
+      created.generationBudget.maxInputTokens +
+      created.generationBudget.maxOutputTokens;
+    const fixtureTurnsByTick = new Map<number, number>();
+    for (const tick of created.scenario.opportunityFixture?.ticks ?? []) {
+      fixtureTurnsByTick.set(tick, (fixtureTurnsByTick.get(tick) ?? 0) + 1);
+    }
+    const maximumFixtureTurnsPerAgentPerTick = Math.max(
+      0,
+      ...fixtureTurnsByTick.values(),
+    );
+    expect(created.scenario.budgets.perAgentDailyTokens).toBe(
+      worstCaseTurnTokens * (
+        maximumFixtureTurnsPerAgentPerTick +
+        PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK
+      ),
+    );
+    expect(created.scenario.budgets.runCostCentsMax).toBe("423");
     const worstCaseTurnMicrocents =
       created.generationBudget.maxInputTokens * 100 +
       created.generationBudget.maxOutputTokens * 300;
     const pinnedTurns =
-      new Set(created.scenario.opportunityFixture?.ticks ?? []).size *
+      (created.scenario.opportunityFixture?.ticks.length ?? 0) *
       created.cohort.size;
+    const nonFixtureTurnHeadroom =
+      fixtureTurnsByTick.size *
+      created.cohort.size *
+      PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK;
     expect(
-      BigInt(pinnedTurns) * BigInt(worstCaseTurnMicrocents),
+      BigInt(pinnedTurns + nonFixtureTurnHeadroom) *
+        BigInt(worstCaseTurnMicrocents),
     ).toBeLessThanOrEqual(
       BigInt(created.scenario.budgets.runCostCentsMax) * 1_000_000n,
     );

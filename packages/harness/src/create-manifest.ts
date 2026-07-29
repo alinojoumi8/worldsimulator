@@ -27,6 +27,7 @@ const DEFAULT_GENERATION_BUDGET = Object.freeze({
   maxToolCalls: 8,
 });
 const PILOT_COHORT_SIZE = 8;
+export const PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK = 1;
 const MICROCENTS_PER_CENT = 1_000_000n;
 
 function sha256File(path: string): string {
@@ -73,10 +74,26 @@ export function createPilotManifest(input: Readonly<{
       BigInt(input.inputMicrocentsPerToken) +
     BigInt(generationBudget.maxOutputTokens) *
       BigInt(input.outputMicrocentsPerToken);
+  const fixtureTurnsByTick = new Map<number, number>();
+  for (const tick of opportunityFixture.ticks) {
+    fixtureTurnsByTick.set(tick, (fixtureTurnsByTick.get(tick) ?? 0) + 1);
+  }
+  const maximumFixtureTurnsPerAgentPerTick = Math.max(
+    0,
+    ...fixtureTurnsByTick.values(),
+  );
+  const dailyTurnCapacity =
+    maximumFixtureTurnsPerAgentPerTick +
+    PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK;
   const pinnedTurnCount =
-    new Set(opportunityFixture.ticks).size * PILOT_COHORT_SIZE;
+    opportunityFixture.ticks.length * PILOT_COHORT_SIZE;
+  const nonFixtureTurnHeadroom =
+    fixtureTurnsByTick.size *
+    PILOT_COHORT_SIZE *
+    PILOT_EXPECTED_NON_FIXTURE_TURNS_PER_AGENT_PER_FIXTURE_TICK;
+  const budgetedTurnCount = pinnedTurnCount + nonFixtureTurnHeadroom;
   const pinnedRunMicrocents =
-    BigInt(pinnedTurnCount) * worstCaseTurnMicrocents;
+    BigInt(budgetedTurnCount) * worstCaseTurnMicrocents;
   const runCostCentsMax = pinnedRunMicrocents === 0n
     ? 1n
     : (
@@ -93,7 +110,7 @@ export function createPilotManifest(input: Readonly<{
       ticks: 60,
       budgets: {
         runCostCentsMax: runCostCentsMax.toString(),
-        perAgentDailyTokens: worstCaseTurnTokens,
+        perAgentDailyTokens: worstCaseTurnTokens * dailyTurnCapacity,
       },
       policyOverrides: {},
       opportunityFixture,

@@ -88,17 +88,12 @@ function parseExperimentManifest(
   allowSchemaV1: boolean,
 ): ParsedExperimentManifest {
   if (
+    !allowSchemaV1 ||
     typeof input !== "object" ||
     input === null ||
     Array.isArray(input) ||
     (input as Readonly<Record<string, unknown>>)["schemaVersion"] !== 1
   ) {
-    return Object.freeze({
-      manifest: experimentManifestSchema.parse(input),
-      sourceSchemaVersion: 2,
-    });
-  }
-  if (!allowSchemaV1) {
     return Object.freeze({
       manifest: experimentManifestSchema.parse(input),
       sourceSchemaVersion: 2,

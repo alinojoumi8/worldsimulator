@@ -118,13 +118,22 @@ function parseHermesTurnStatsEvidence(
   });
 }
 
-interface ParsedHermesRunEvidence {
+export interface ParsedHermesRunEvidence {
   readonly accepted: readonly HermesTurnStats[];
   readonly rejected: readonly Readonly<{
     index: number;
     error: string;
     value: unknown;
   }>[];
+}
+
+function sanitizedRejectedHermesText(
+  value: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  return redactSecrets(value, secrets)
+    .replaceAll(/\bbearer\s+[A-Za-z0-9._-]{8,}/gi, "[REDACTED]")
+    .slice(0, 1_000);
 }
 
 export function sanitizedRejectedHermesValue(
@@ -135,9 +144,7 @@ export function sanitizedRejectedHermesValue(
   if (depth >= 6) return "[TRUNCATED]";
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "string") {
-    return redactSecrets(value, secrets)
-      .replaceAll(/\bbearer\s+[A-Za-z0-9._-]{8,}/gi, "[REDACTED]")
-      .slice(0, 1_000);
+    return sanitizedRejectedHermesText(value, secrets);
   }
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : String(value);
@@ -154,19 +161,22 @@ export function sanitizedRejectedHermesValue(
       Object.keys(record)
         .sort(compareCodeUnit)
         .slice(0, 100)
-        .map((key) => [
-          key,
-          /(authorization|api.?key|bearer|credential|pat|password|prompt|reasoning|secret|session.?key|token)/i
-              .test(key)
-            ? "[REDACTED]"
-            : sanitizedRejectedHermesValue(record[key], secrets, depth + 1),
-        ]),
+        .map((key, index) => {
+          const sanitizedKey = sanitizedRejectedHermesText(key, secrets);
+          return [
+            sanitizedKey === key ? key : `[REDACTED_KEY_${index}]`,
+            /(authorization|api.?key|bearer|credential|pat|password|prompt|reasoning|secret|session.?key|token)/i
+                .test(key)
+              ? "[REDACTED]"
+              : sanitizedRejectedHermesValue(record[key], secrets, depth + 1),
+          ];
+        }),
     );
   }
   return `[${typeof value}]`;
 }
 
-function parseHermesRunsForArtifact(
+export function parseHermesRunsForArtifact(
   values: readonly unknown[],
   anomalies: string[],
   secrets: readonly (string | undefined)[],
@@ -182,10 +192,12 @@ function parseHermesRunsForArtifact(
       accepted.push(parseHermesTurnStatsEvidence(value, index));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      anomalies.push(`Hermes runtime evidence: ${detail}`.slice(0, 900));
+      const sanitizedDetail = sanitizedRejectedHermesText(detail, secrets)
+        .slice(0, 900);
+      anomalies.push(`Hermes runtime evidence: ${sanitizedDetail}`.slice(0, 900));
       rejected.push({
         index,
-        error: detail.slice(0, 900),
+        error: sanitizedDetail,
         value: sanitizedRejectedHermesValue(value, secrets),
       });
     }

@@ -24,4 +24,14 @@ describe("Hermes runtime version inspection", () => {
       /Hermes runtime dependency inspection did not return JSON.*starts cleanly/,
     );
   });
+
+  it("names a missing required Hermes optional dependency", () => {
+    expect(() => parseHermesDependencyInspectionOutput(JSON.stringify({
+      aiohttp: "3.14.1",
+      mcp: null,
+      starlette: "1.3.1",
+    }))).toThrow(
+      /missing required optional dependency mcp.*install the pinned Hermes MCP\/API-server extras/,
+    );
+  });
 });
