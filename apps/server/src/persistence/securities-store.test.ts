@@ -107,10 +107,11 @@ function fixture() {
   const finance = new SqliteFinanceStore(db, TEST_RUN_ID);
   const financeGenesis = finance.initialize(population, ids);
   const company = db.prepare<[string], {
+    account_id: string;
     company_id: string;
     balance_cents: string;
   }>(`
-    SELECT cap.company_id, account.balance_cents
+    SELECT account.id AS account_id, cap.company_id, account.balance_cents
     FROM company_cap_tables cap
     JOIN bank_accounts account
       ON account.run_id = cap.run_id
@@ -137,6 +138,7 @@ function fixture() {
     finance,
     financeGenesis,
     ids,
+    companyAccountId: company.account_id,
     companyId: company.company_id,
     companyBalanceCents: company.balance_cents,
     triggerEventId: triggerEvent.eventId,
@@ -173,6 +175,11 @@ describe("SqliteSecuritiesStore", () => {
       eligible: false,
       checks: { sharesWithinTotal: false },
     });
+    expect(() => state.store.listSecurity({
+      ...input,
+      sharesListed: "10001",
+      triggerEventId: state.triggerEventId,
+    }, context(state.db, state.ids, 30))).toThrow(/not eligible/);
     expect(state.ids.serialize()).toEqual(checkpoint);
   });
 
@@ -280,6 +287,11 @@ describe("SqliteSecuritiesStore", () => {
       idempotencyKey: "securities-second-account",
       legs: [
         {
+          accountId: state.companyAccountId,
+          direction: "debit",
+          amountCents: "2",
+        },
+        {
           accountId: secondaryAccountId,
           direction: "debit",
           amountCents: "1",
@@ -287,7 +299,7 @@ describe("SqliteSecuritiesStore", () => {
         {
           accountId: state.financeGenesis.rowAccountId,
           direction: "credit",
-          amountCents: "1",
+          amountCents: "3",
         },
       ],
     }));
@@ -299,8 +311,8 @@ describe("SqliteSecuritiesStore", () => {
       referencePriceCents: "1250",
     } as const;
     expect(state.store.assess(input, 30)).toMatchObject({
-      profit30Cents: "1",
-      capitalCents: "1",
+      profit30Cents: "3",
+      capitalCents: "3",
       eligibilityBasis: "profitability",
       eligible: true,
     });
@@ -358,6 +370,19 @@ describe("SqliteSecuritiesStore", () => {
       listed.id,
     );
 
+    expect(() => state.store.get(listed.id)).toThrow(/eligibility is invalid/);
+
+    state.db.prepare(`
+      UPDATE securities SET eligibility_canonical = ?
+      WHERE run_id = ? AND id = ?
+    `).run(
+      canonicalStringify({
+        ...listed.eligibility,
+        eligible: false,
+      }),
+      TEST_RUN_ID,
+      listed.id,
+    );
     expect(() => state.store.get(listed.id)).toThrow(/eligibility is invalid/);
   });
 

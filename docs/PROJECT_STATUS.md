@@ -140,7 +140,14 @@ pnpm test
 pnpm build
 ```
 
-Latest verified controlled-test and WS-805 handoff (2026-07-24):
+Latest verified WS-901 backend handoff (2026-07-28): `pnpm typecheck`,
+`pnpm lint`, `pnpm test`, and `pnpm build` passed. Vitest reports 145 files
+and 763 tests green. The focused shared-rule, migration, persistence,
+multi-account, rollback, reopen, and tamper gate reports 50 tests green.
+No browser gate applies to this backend-only ticket; WS-905 owns the market UI.
+The production build retains the existing chunk-size advisory.
+
+Previous verified controlled-test and WS-805 handoff (2026-07-24):
 `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and
 `pnpm test:e2e` all passed. Vitest reports 136 files and 724 tests green,
 including the envelope-v2 360-tick source run, strict replay, second independent

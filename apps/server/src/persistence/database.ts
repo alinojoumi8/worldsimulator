@@ -6,8 +6,6 @@ import Database from "better-sqlite3";
 import {
   EngineError,
   runIdSchema,
-  SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
-  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
   sha256Hex,
   simulationIdSchema,
 } from "@worldtangle/shared";
@@ -21,13 +19,11 @@ interface Migration {
   readonly requiresForeignKeysOff?: boolean;
 }
 
-const SECURITIES_PROFIT_REVENUE_SQL =
-  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS
-    .map((kind) => `'${kind}'`)
-    .join(", ");
-const SECURITIES_PROFIT_COST_SQL = SECURITIES_PROFIT_COST_TRANSACTION_KINDS
-  .map((kind) => `'${kind}'`)
-  .join(", ");
+// Migration 36 is byte-pinned. Future policy changes require a new migration.
+const SECURITIES_PROFIT_REVENUE_SQL_V36 = "'purchase', 'row_settlement'";
+const SECURITIES_PROFIT_COST_SQL_V36 =
+  "'payroll', 'purchase', 'loan_payment', 'tax', 'benefit', 'fee', " +
+  "'dividend', 'row_settlement'";
 
 const INITIAL_SCHEMA = `
 CREATE TABLE simulations (
@@ -5096,13 +5092,14 @@ WHEN
       AND cap.total_shares =
         json_extract(NEW.eligibility_canonical, '$.totalShares')
       AND CAST(NEW.shares_listed AS INTEGER) <= CAST(cap.total_shares AS INTEGER)
+      AND NOT EXISTS (
+        SELECT 1 FROM company_wind_downs wind_down
+        WHERE wind_down.run_id = cap.run_id
+          AND wind_down.company_id = cap.company_id
+      )
       AND (
         (
-          cap.company_kind = 'opening' AND NEW.listed_tick >= 30 AND NOT EXISTS (
-            SELECT 1 FROM company_wind_downs wind_down
-            WHERE wind_down.run_id = cap.run_id
-              AND wind_down.company_id = cap.company_id
-          )
+          cap.company_kind = 'opening' AND NEW.listed_tick >= 30
         ) OR (
           cap.company_kind = 'dynamic' AND company.status = 'active' AND
           COALESCE(company.activated_tick, company.founded_tick) IS NOT NULL AND
@@ -5111,21 +5108,21 @@ WHEN
         )
       )
       AND (
-        EXISTS (
-          SELECT 1 FROM bank_accounts account
+        COALESCE((
+          SELECT SUM(CAST(account.balance_cents AS INTEGER))
+          FROM bank_accounts account
           WHERE account.run_id = cap.run_id
             AND account.owner_kind = 'company'
             AND account.owner_id = cap.company_id
             AND account.account_type = 'checking' AND account.status = 'active'
-            AND CAST(account.balance_cents AS INTEGER) >= 10000000
-        ) OR (
+        ), 0) >= 10000000 OR (
           SELECT COALESCE(SUM(
             CASE
               WHEN leg.direction = 'debit' AND
-                transaction_row.kind IN (${SECURITIES_PROFIT_REVENUE_SQL})
+                transaction_row.kind IN (${SECURITIES_PROFIT_REVENUE_SQL_V36})
                 THEN CAST(leg.amount_cents AS INTEGER)
               WHEN leg.direction = 'credit' AND
-                transaction_row.kind IN (${SECURITIES_PROFIT_COST_SQL})
+                transaction_row.kind IN (${SECURITIES_PROFIT_COST_SQL_V36})
                 THEN -CAST(leg.amount_cents AS INTEGER)
               ELSE 0
             END
@@ -5323,6 +5320,8 @@ const MIGRATIONS: readonly Migration[] = [
     sql: PHASE_9_SECURITIES_LISTINGS,
   },
 ];
+
+export const WORLD_DATABASE_MIGRATION_COUNT = MIGRATIONS.length;
 
 interface AppliedMigrationRow {
   version: bigint;

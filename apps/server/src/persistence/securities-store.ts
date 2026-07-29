@@ -114,17 +114,13 @@ export class SqliteSecuritiesStore {
     const input = listSecurityInputSchema.parse(rawInput);
     const company = this.company(input.companyId);
     const accounts = this.companyAccounts(input.companyId);
-    const capitalCents = accounts.reduce(
-      (maximum, account) => {
-        const balance = BigInt(account.balance_cents);
-        return balance > maximum ? balance : maximum;
-      },
-      BigInt(accounts[0]!.balance_cents),
-    ).toString();
+    const capitalCents = accounts
+      .reduce((total, account) => total + BigInt(account.balance_cents), 0n)
+      .toString();
     const profit30Cents = this.profit30Cents(input.companyId, tick);
-    const companyActive = company.company_kind === "opening"
-      ? company.wound_down === 0n
-      : company.status === "active";
+    const companyActive = company.wound_down === 0n && (
+      company.company_kind === "opening" || company.status === "active"
+    );
     let foundedTick = 0;
     if (company.company_kind === "dynamic") {
       const provenanceTick = company.activated_tick ?? company.founded_tick;

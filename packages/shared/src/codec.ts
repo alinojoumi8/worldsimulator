@@ -220,6 +220,7 @@ export class IdFactory {
     return Object.fromEntries(entries) as Record<string, number>;
   }
 
+  /** Replaces all counters with a validated snapshot for checkpoint rollback. */
   restore(state: Record<string, number>): void {
     const restored = IdFactory.restore(state);
     this.counters.clear();

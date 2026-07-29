@@ -14,7 +14,7 @@ function withinSignedSqliteRange(value: string): boolean {
   }
 }
 
-const signedIntegerSchema = z.string().regex(/^-?(?:0|[1-9]\d*)$/)
+const signedIntegerSchema = z.string().regex(/^(?:0|-?[1-9]\d*)$/)
   .refine(withinSignedSqliteRange, {
     message: "integer exceeds the authoritative SQLite range",
   });
@@ -313,6 +313,7 @@ export const securityListedPayloadSchema = z.object({
   companyId: ventureTargetCompanyIdSchema,
   symbol: securitySymbolSchema,
   sharesListed: positiveIntegerSchema,
+  // API_CONTRACTS.md freezes this V1 event key as referencePrice.
   referencePrice: positiveIntegerSchema,
 }).strict();
 

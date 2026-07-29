@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assessSecuritiesListingEligibility,
   RIVERBEND_SECURITIES_LISTING_POLICY,
+  SECURITIES_PROFIT_COST_TRANSACTION_KINDS,
+  SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS,
   securitiesListingEligibilityAssessmentSchema,
   securitiesListingEligibilityInputSchema,
 } from "./securities";
@@ -18,6 +20,23 @@ const eligibleInput = {
 } as const;
 
 describe("securities listing eligibility", () => {
+  it("pins the transaction kinds used by the version-1 profit policy", () => {
+    expect(SECURITIES_PROFIT_REVENUE_TRANSACTION_KINDS).toEqual([
+      "purchase",
+      "row_settlement",
+    ]);
+    expect(SECURITIES_PROFIT_COST_TRANSACTION_KINDS).toEqual([
+      "payroll",
+      "purchase",
+      "loan_payment",
+      "tax",
+      "benefit",
+      "fee",
+      "dividend",
+      "row_settlement",
+    ]);
+  });
+
   it("accepts the profitability or capital path after the minimum age", () => {
     const profitable = assessSecuritiesListingEligibility(eligibleInput);
     expect(profitable).toMatchObject({
@@ -117,6 +136,10 @@ describe("securities listing eligibility", () => {
     expect(securitiesListingEligibilityInputSchema.safeParse({
       ...eligibleInput,
       profit30Cents: "1e2",
+    }).success).toBe(false);
+    expect(securitiesListingEligibilityInputSchema.safeParse({
+      ...eligibleInput,
+      profit30Cents: "-0",
     }).success).toBe(false);
 
     const valid = assessSecuritiesListingEligibility(eligibleInput);
